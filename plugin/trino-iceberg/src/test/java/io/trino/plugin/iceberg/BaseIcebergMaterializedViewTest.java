@@ -53,6 +53,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -69,6 +70,7 @@ import static io.trino.spi.function.table.TableFunctionProcessorState.Finished.F
 import static io.trino.spi.function.table.TableFunctionProcessorState.Processed.produced;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.testing.MaterializedResult.DEFAULT_PRECISION;
+import static io.trino.testing.TestingAccessControlManager.TestingPrivilegeType.CREATE_MATERIALIZED_VIEW;
 import static io.trino.testing.TestingAccessControlManager.TestingPrivilegeType.DROP_MATERIALIZED_VIEW;
 import static io.trino.testing.TestingAccessControlManager.TestingPrivilegeType.REFRESH_MATERIALIZED_VIEW;
 import static io.trino.testing.TestingAccessControlManager.TestingPrivilegeType.RENAME_MATERIALIZED_VIEW;
@@ -144,6 +146,45 @@ public abstract class BaseIcebergMaterializedViewTest
         assertThat(getColumnComment(materializedViewName, viewColumnName)).isEqualTo("new comment");
         assertQuery(format("SELECT count(*) FROM %s", materializedViewName), "VALUES 6");
         assertUpdate(format("DROP MATERIALIZED VIEW %s", materializedViewName));
+    }
+
+    @Test
+    public void testLargeMaterializedViewsFreshness()
+            throws InterruptedException
+    {
+        runLargeMaterializedViewsFreshness();
+    }
+
+    private void runLargeMaterializedViewsFreshness()
+            throws InterruptedException
+    {
+        String suffix = randomNameSuffix();
+        for (int i = 0; i < 20; i++) {
+            assertUpdate("CREATE TABLE mv_fresh_" + i + "_" + suffix + " AS SELECT * FROM base_table1", 6);
+        }
+        List<String> createMvBody = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            createMvBody.add("SELECT * FROM mv_fresh_" + i + "_" + suffix);
+        }
+        String mvName = "mv_freshness_" + suffix;
+        assertUpdate("CREATE MATERIALIZED VIEW " + mvName + " AS " + String.join(" UNION ALL \n", createMvBody));
+
+        List<Long> costs = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            long start = System.currentTimeMillis();
+            computeActual("REFRESH MATERIALIZED VIEW " + mvName);
+            assertUpdate("INSERT INTO mv_fresh_" + i + "_" + suffix + " VALUES (0, DATE '2019-09-08')", 1);
+
+            long end = System.currentTimeMillis();
+            costs.add(end - start);
+            Thread.sleep(10);
+        }
+
+        for (int i = 0; i < 20; i++) {
+            assertUpdate("DROP TABLE mv_fresh_" + i + "_" + suffix);
+        }
+
+        System.out.println("Costs: " + costs);
     }
 
     @Test

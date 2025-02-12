@@ -3779,6 +3779,14 @@ public class IcebergMetadata
 
     private TableChangeInfo getTableChangeInfo(ConnectorSession session, IcebergTableHandle table, Optional<Long> snapshotAtRefresh)
     {
+        try {
+            // running testLargeMaterializedViewsFreshness shows the method return within 1ms
+            // Sleep for 10ms in to simulate the realistic time required to load table change info.
+            Thread.sleep(10);
+        }
+        catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
         Table icebergTable = catalog.loadTable(session, table.getSchemaTableName());
         Snapshot currentSnapshot = icebergTable.currentSnapshot();
 
