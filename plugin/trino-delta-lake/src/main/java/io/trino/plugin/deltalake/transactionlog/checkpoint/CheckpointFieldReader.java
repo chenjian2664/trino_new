@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -94,6 +95,21 @@ public class CheckpointFieldReader
         int field = requireField(fieldName);
         LongArrayBlock valueBlock = (LongArrayBlock) row.getUnderlyingFieldBlock(field);
         return valueBlock.getLong(row.getUnderlyingFieldPosition(field));
+    }
+
+    public OptionalLong getOptionalLong(String fieldName)
+    {
+        OptionalInt index = findField(fieldName);
+        if (index.isEmpty()) {
+            return OptionalLong.empty();
+        }
+
+        LongArrayBlock valueBlock = (LongArrayBlock) row.getUnderlyingFieldBlock(index.getAsInt());
+        int position = row.getUnderlyingFieldPosition(index.getAsInt());
+        if (valueBlock.isNull(position)) {
+            return OptionalLong.empty();
+        }
+        return OptionalLong.of(valueBlock.getLong(position));
     }
 
     @Nullable

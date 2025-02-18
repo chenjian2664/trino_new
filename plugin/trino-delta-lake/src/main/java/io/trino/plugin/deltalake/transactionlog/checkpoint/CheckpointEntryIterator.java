@@ -438,6 +438,7 @@ public class CheckpointEntryIterator
 
         CommitInfoEntry result = new CommitInfoEntry(
                 commitInfo.getLong("version"),
+                commitInfo.getOptionalLong("inCommitTimestamp"),
                 commitInfo.getLong("timestamp"),
                 commitInfo.getString("userId"),
                 commitInfo.getString("userName"),
