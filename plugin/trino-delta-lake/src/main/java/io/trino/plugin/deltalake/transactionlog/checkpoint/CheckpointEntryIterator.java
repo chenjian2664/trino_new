@@ -17,6 +17,8 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
 import com.google.common.math.LongMath;
 import io.airlift.log.Logger;
 import io.trino.filesystem.TrinoInputFile;
@@ -192,6 +194,8 @@ public class CheckpointEntryIterator
             deletionVectorsEnabled = isDeletionVectorEnabled(this.metadataEntry, this.protocolEntry);
             checkArgument(addStatsMinMaxColumnFilter.isPresent(), "addStatsMinMaxColumnFilter must be provided when reading ADD entries from Checkpoint files");
             this.schema = extractSchema(this.metadataEntry, this.protocolEntry, typeManager);
+            Set<String> skippingStatsColumns = this.metadataEntry.getSkippingStatsColumns();
+            checkArgument(Sets.intersection(skippingStatsColumns, ImmutableSet.copyOf(this.metadataEntry.getOriginalPartitionColumns())).isEmpty(), "Skipping stats columns must not contains partition columns");
             this.columnsWithMinMaxStats = columnsWithStats(schema, this.metadataEntry.getOriginalPartitionColumns());
             Predicate<String> columnStatsFilterFunction = addStatsMinMaxColumnFilter.orElseThrow();
             this.columnsWithMinMaxStats = columnsWithMinMaxStats.stream()

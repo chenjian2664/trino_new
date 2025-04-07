@@ -434,6 +434,7 @@ public class TransactionLogAccess
     {
         return schema.stream()
                 .filter(column -> !partitionColumns.contains(column.name()))
+
                 .filter(column -> {
                     Type type = column.type();
                     return !(type instanceof MapType || type instanceof ArrayType || type.equals(BooleanType.BOOLEAN) || type.equals(VarbinaryType.VARBINARY));
