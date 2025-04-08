@@ -26,6 +26,7 @@ import com.google.common.primitives.SignedBytes;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import com.mongodb.DBRef;
 import com.mongodb.MongoNamespace;
+import com.mongodb.client.ClientSession;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
@@ -198,6 +199,12 @@ public class MongoSession
         client.close();
     }
 
+    public ClientSession startSession()
+    {
+        // TODO: allow custom options
+        return client.startSession();
+    }
+
     public List<HostAddress> getAddresses()
     {
         return client.getClusterDescription().getServerDescriptions().stream()
@@ -271,6 +278,16 @@ public class MongoSession
         }
         createTableMetadata(name, columns, comment);
         client.getDatabase(name.databaseName()).createCollection(name.collectionName());
+    }
+
+    public void dropTableQuietly(RemoteTableName tableName)
+    {
+
+        if (tableCache.getIfPresent(new SchemaTableName(tableName.databaseName(), tableName.collectionName())) == null) {
+            return;
+        }
+
+        dropTable(tableName);
     }
 
     public void dropTable(RemoteTableName remoteTableName)

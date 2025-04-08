@@ -14,6 +14,9 @@
 package io.trino.plugin.mongodb;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
+import org.bson.Document;
 import org.testcontainers.containers.MongoDBContainer;
 
 import java.io.Closeable;
@@ -33,7 +36,7 @@ public class MongoServer
         this.dockerContainer = new MongoDBContainer("mongo:" + mongoVersion)
                 .withStartupAttempts(3)
                 .withEnv("MONGO_INITDB_DATABASE", "tpch")
-                .withCommand("--bind_ip 0.0.0.0");
+                .withCommand("--replSet rs0 --bind_ip 0.0.0.0");
         this.dockerContainer.start();
     }
 

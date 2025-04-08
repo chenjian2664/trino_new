@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
 import com.google.common.io.Closer;
+import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.MergeOptions;
 import io.airlift.log.Logger;
@@ -85,8 +86,6 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -147,8 +146,7 @@ public class MongoMetadata
 
     private final MongoSession mongoSession;
 
-    private final AtomicReference<Runnable> insertRollbackAction = new AtomicReference<>();
-    private final AtomicReference<MergeRollbackAction> mergeRollbackAction = new AtomicReference<>();
+    private final List<Runnable> rollbackActions = new ArrayList<>();
 
     public MongoMetadata(MongoSession mongoSession)
     {
@@ -425,7 +423,7 @@ public class MongoMetadata
 
         Closer closer = Closer.create();
         closer.register(() -> mongoSession.dropTable(remoteTableName));
-        setInsertRollback(() -> {
+        rollbackActions.add(() -> {
             try {
                 closer.close();
             }
@@ -463,22 +461,13 @@ public class MongoMetadata
     {
         MongoOutputTableHandle handle = (MongoOutputTableHandle) tableHandle;
         if (handle.temporaryTableName().isPresent()) {
-            finishInsert(session, handle.remoteTableName(), handle.getTemporaryRemoteTableName().get(), handle.pageSinkIdColumnName().get(), fragments);
+            finishInsert(session, Optional.empty(), handle.remoteTableName(), handle.getTemporaryRemoteTableName().get(), handle.pageSinkIdColumnName().get(), fragments);
         }
         return Optional.empty();
     }
 
     @Override
     public ConnectorInsertTableHandle beginInsert(ConnectorSession session, ConnectorTableHandle tableHandle, List<ColumnHandle> insertedColumns, RetryMode retryMode)
-    {
-        return beginInsert(session, tableHandle, retryMode, this::setInsertRollback);
-    }
-
-    private ConnectorInsertTableHandle beginInsert(
-            ConnectorSession session,
-            ConnectorTableHandle tableHandle,
-            RetryMode retryMode,
-            Consumer<Runnable> setRollback)
     {
         MongoTable table = mongoSession.getTable(((MongoTableHandle) tableHandle).schemaTableName());
         MongoTableHandle handle = table.tableHandle();
@@ -504,7 +493,7 @@ public class MongoMetadata
         RemoteTableName temporaryTable = new RemoteTableName(handle.schemaTableName().getSchemaName(), generateTemporaryTableName(session));
         mongoSession.createTable(temporaryTable, allColumns, Optional.empty());
 
-        setRollback.accept(() -> mongoSession.dropTable(temporaryTable));
+        rollbackActions.add(() -> mongoSession.dropTable(temporaryTable));
 
         return new MongoInsertTableHandle(
                 handle.remoteTableName(),
@@ -523,13 +512,14 @@ public class MongoMetadata
     {
         MongoInsertTableHandle handle = (MongoInsertTableHandle) insertHandle;
         if (handle.temporaryTableName().isPresent()) {
-            finishInsert(session, handle.remoteTableName(), handle.getTemporaryRemoteTableName().get(), handle.pageSinkIdColumnName().get(), fragments);
+            finishInsert(session, Optional.empty(), handle.remoteTableName(), handle.getTemporaryRemoteTableName().get(), handle.pageSinkIdColumnName().get(), fragments);
         }
         return Optional.empty();
     }
 
     private void finishInsert(
             ConnectorSession session,
+            Optional<ClientSession> clientSession,
             RemoteTableName targetTable,
             RemoteTableName temporaryTable,
             String pageSinkIdColumnName,
@@ -538,7 +528,7 @@ public class MongoMetadata
         Closer closer = Closer.create();
         closer.register(() -> mongoSession.dropTable(temporaryTable));
         try {
-            RemoteTableName pageSinkIdsTable = getPageSinkIdsTable(session, temporaryTable, pageSinkIdColumnName, fragments, closer);
+            RemoteTableName pageSinkIdsTable = getPageSinkIdsTable(session, clientSession, temporaryTable, pageSinkIdColumnName, fragments, closer);
 
             MongoCollection<Document> temporaryCollection = mongoSession.getCollection(temporaryTable);
             temporaryCollection.aggregate(ImmutableList.of(
@@ -558,20 +548,47 @@ public class MongoMetadata
         }
     }
 
-    private RemoteTableName getPageSinkIdsTable(ConnectorSession session, RemoteTableName temporaryTable, String pageSinkIdColumnName, Collection<Slice> fragments, Closer closer)
+    private void prepareInsert(
+            ConnectorSession session,
+            ClientSession clientSession,
+            RemoteTableName targetTable,
+            RemoteTableName temporaryTable,
+            String pageSinkIdColumnName,
+            Collection<Slice> fragments,
+            Closer closer)
+    {
+        closer.register(() -> mongoSession.dropTableQuietly(temporaryTable));
+        RemoteTableName pageSinkIdsTable = getPageSinkIdsTable(session, Optional.of(clientSession), temporaryTable, pageSinkIdColumnName, fragments, closer);
+
+        MongoCollection<Document> temporaryCollection = mongoSession.getCollection(temporaryTable);
+        temporaryCollection.aggregate(clientSession, ImmutableList.of(
+                        lookup(pageSinkIdsTable.collectionName(), pageSinkIdColumnName, pageSinkIdColumnName, "page_sink_id"),
+                        match(ne("page_sink_id", ImmutableList.of())),
+                        project(exclude("page_sink_id")),
+                        merge(targetTable.collectionName())))
+                .toCollection();
+    }
+
+    private RemoteTableName getPageSinkIdsTable(
+            ConnectorSession session,
+            Optional<ClientSession> clientSession,
+            RemoteTableName temporaryTable,
+            String pageSinkIdColumnName,
+            Collection<Slice> fragments,
+            Closer closer)
     {
         // Create the temporary page sink ID table
         RemoteTableName pageSinkIdsTable = new RemoteTableName(temporaryTable.databaseName(), generateTemporaryTableName(session));
         MongoColumnHandle pageSinkIdColumn = new MongoColumnHandle(pageSinkIdColumnName, ImmutableList.of(), TRINO_PAGE_SINK_ID_COLUMN_TYPE, false, false, Optional.empty());
         mongoSession.createTable(pageSinkIdsTable, ImmutableList.of(pageSinkIdColumn), Optional.empty());
-        closer.register(() -> mongoSession.dropTable(pageSinkIdsTable));
+        closer.register(() -> mongoSession.dropTableQuietly(pageSinkIdsTable));
 
         // Insert all the page sink IDs into the page sink ID table
         MongoCollection<Document> pageSinkIdsCollection = mongoSession.getCollection(pageSinkIdsTable);
         List<Document> pageSinkIds = fragments.stream()
                 .map(slice -> new Document(pageSinkIdColumnName, slice.getLong(0)))
                 .collect(toImmutableList());
-        pageSinkIdsCollection.insertMany(pageSinkIds);
+        clientSession.ifPresentOrElse(executeSession -> pageSinkIdsCollection.insertMany(executeSession, pageSinkIds), () -> pageSinkIdsCollection.insertMany(pageSinkIds));
         return pageSinkIdsTable;
     }
 
@@ -594,7 +611,7 @@ public class MongoMetadata
         RemoteTableName temporaryTable = new RemoteTableName(tableHandle.schemaTableName().getSchemaName(), generateTemporaryTableName(session));
         mongoSession.createTable(temporaryTable, allColumns, Optional.empty());
 
-        mergeRollbackAction.get().appendRollback(() -> mongoSession.dropTable(temporaryTable));
+        rollbackActions.add(() -> mongoSession.dropTable(temporaryTable));
 
         return Optional.of(new MongoOutputTableHandle(
                 tableHandle.remoteTableName(),
@@ -603,41 +620,31 @@ public class MongoMetadata
                 Optional.of(pageSinkIdColumn.baseName())));
     }
 
-    private void finishDelete(
+    private void prepareDelete(
             ConnectorSession session,
+            ClientSession clientSession,
             RemoteTableName targetTable,
             RemoteTableName temporaryTable,
             String pageSinkIdColumnName,
             List<MongoColumnHandle> columnHandles,
-            Collection<Slice> fragments)
+            Collection<Slice> fragments,
+            Closer closer)
     {
         String rowIdName = getLast(columnHandles).baseName();
         checkArgument(!isNullOrEmpty(rowIdName) && rowIdName.startsWith(MERGE_ROW_ID_BASE_NAME), "Error rowId name: " + rowIdName);
 
-        Closer closer = Closer.create();
-        closer.register(() -> mongoSession.dropTable(temporaryTable));
+        closer.register(() -> mongoSession.dropTableQuietly(temporaryTable));
 
-        try {
-            RemoteTableName pageSinkIdsTable = getPageSinkIdsTable(session, temporaryTable, pageSinkIdColumnName, fragments, closer);
+        RemoteTableName pageSinkIdsTable = getPageSinkIdsTable(session, Optional.of(clientSession), temporaryTable, pageSinkIdColumnName, fragments, closer);
+        MongoCollection<Document> temporaryCollection = mongoSession.getCollection(temporaryTable);
+        List<Object> idsToDelete = new ArrayList<>();
+        temporaryCollection.aggregate(clientSession, ImmutableList.of(
+                        lookup(pageSinkIdsTable.collectionName(), pageSinkIdColumnName, pageSinkIdColumnName, "page_sink_id"),
+                        match(ne("page_sink_id", ImmutableList.of()))))
+                .map(document -> document.get(rowIdName)).into(idsToDelete);
 
-            MongoCollection<Document> temporaryCollection = mongoSession.getCollection(temporaryTable);
-            List<Object> idsToDelete = new ArrayList<>();
-            temporaryCollection.aggregate(ImmutableList.of(
-                    lookup(pageSinkIdsTable.collectionName(), pageSinkIdColumnName, pageSinkIdColumnName, "page_sink_id"),
-                    match(ne("page_sink_id", ImmutableList.of()))))
-                    .map(document -> document.get(rowIdName)).into(idsToDelete);
-
-            MongoCollection<Document> targetCollection = mongoSession.getCollection(targetTable);
-            targetCollection.deleteMany(in(MERGE_ROW_ID_BASE_NAME, idsToDelete));
-        }
-        finally {
-            try {
-                closer.close();
-            }
-            catch (IOException e) {
-                throw new TrinoException(GENERIC_INTERNAL_ERROR, e);
-            }
-        }
+        MongoCollection<Document> targetCollection = mongoSession.getCollection(targetTable);
+        targetCollection.deleteMany(clientSession, in(MERGE_ROW_ID_BASE_NAME, idsToDelete));
     }
 
     private Optional<MongoOutputTableHandle> beginUpdate(ConnectorSession session, MongoTableHandle tableHandle, RetryMode retryMode)
@@ -672,7 +679,7 @@ public class MongoMetadata
         RemoteTableName temporaryTable = new RemoteTableName(tableHandle.schemaTableName().getSchemaName(), generateTemporaryTableName(session));
         mongoSession.createTable(temporaryTable, allColumns, Optional.empty());
 
-        mergeRollbackAction.get().appendRollback(() -> mongoSession.dropTable(temporaryTable));
+        rollbackActions.add(() -> mongoSession.dropTable(temporaryTable));
 
         return Optional.of(new MongoOutputTableHandle(
                 tableHandle.remoteTableName(),
@@ -683,44 +690,35 @@ public class MongoMetadata
 
     private void finishUpdate(
             ConnectorSession session,
+            ClientSession clientSession,
             RemoteTableName targetTable,
             RemoteTableName temporaryTable,
             String pageSinkIdColumnName,
             List<MongoColumnHandle> columnHandles,
-            Collection<Slice> fragments)
+            Collection<Slice> fragments,
+            Closer closer)
     {
-        Closer closer = Closer.create();
-        closer.register(() -> mongoSession.dropTable(temporaryTable));
+        closer.register(() -> mongoSession.dropTableQuietly(temporaryTable));
 
         String rowIdName = getLast(columnHandles).baseName();
         checkArgument(!isNullOrEmpty(rowIdName) && rowIdName.startsWith(MERGE_ROW_ID_BASE_NAME), "Error rowId name: " + rowIdName);
 
-        try {
-            MongoCollection<Document> temporaryCollection = mongoSession.getCollection(temporaryTable);
+        MongoCollection<Document> temporaryCollection = mongoSession.getCollection(temporaryTable);
 
-            RemoteTableName pageSinkIdsTable = getPageSinkIdsTable(session, temporaryTable, pageSinkIdColumnName, fragments, closer);
-            MergeOptions mergeOptions = new MergeOptions()
-                    .whenMatched(MergeOptions.WhenMatched.MERGE)
-                    .whenNotMatched(MergeOptions.WhenNotMatched.FAIL)
-                    .uniqueIdentifier(MERGE_ROW_ID_BASE_NAME);
+        RemoteTableName pageSinkIdsTable = getPageSinkIdsTable(session, Optional.of(clientSession), temporaryTable, pageSinkIdColumnName, fragments, closer);
+        MergeOptions mergeOptions = new MergeOptions()
+                .whenMatched(MergeOptions.WhenMatched.MERGE)
+                .whenNotMatched(MergeOptions.WhenNotMatched.FAIL)
+                .uniqueIdentifier(MERGE_ROW_ID_BASE_NAME);
 
-            temporaryCollection.aggregate(ImmutableList.of(
-                    lookup(pageSinkIdsTable.collectionName(), pageSinkIdColumnName, pageSinkIdColumnName, "page_sink_id"),
-                    match(ne("page_sink_id", ImmutableList.of())),
-                    // Replace the unique key with the rowIdName reference value
-                    addFields(new com.mongodb.client.model.Field<>(MERGE_ROW_ID_BASE_NAME, "$" + rowIdName)),
-                    project(fields(exclude(rowIdName), exclude("page_sink_id"))),
-                    merge(targetTable.collectionName(), mergeOptions)))
-                    .toCollection();
-        }
-        finally {
-            try {
-                closer.close();
-            }
-            catch (IOException e) {
-                throw new TrinoException(GENERIC_INTERNAL_ERROR, e);
-            }
-        }
+        temporaryCollection.aggregate(clientSession, ImmutableList.of(
+                        lookup(pageSinkIdsTable.collectionName(), pageSinkIdColumnName, pageSinkIdColumnName, "page_sink_id"),
+                        match(ne("page_sink_id", ImmutableList.of())),
+                        // Replace the unique key with the rowIdName reference value
+                        addFields(new com.mongodb.client.model.Field<>(MERGE_ROW_ID_BASE_NAME, "$" + rowIdName)),
+                        project(fields(exclude(rowIdName), exclude("page_sink_id"))),
+                        merge(targetTable.collectionName(), mergeOptions)))
+                .toCollection();
     }
 
     @Override
@@ -734,9 +732,7 @@ public class MongoMetadata
     {
         MongoTableHandle table = (MongoTableHandle) tableHandle;
 
-        setMergeRollbackAction();
-
-        MongoInsertTableHandle insertTableHandle = (MongoInsertTableHandle) beginInsert(session, tableHandle, retryMode, rollback -> mergeRollbackAction.get().appendRollback(rollback));
+        MongoInsertTableHandle insertTableHandle = (MongoInsertTableHandle) beginInsert(session, tableHandle, ImmutableList.of(), retryMode);
 
         return new MongoMergeTableHandle(
                 insertTableHandle.remoteTableName(),
@@ -751,34 +747,6 @@ public class MongoMetadata
                 insertTableHandle.pageSinkIdColumnName());
     }
 
-    private static final class MergeRollbackAction
-    {
-        private final List<Runnable> rollbackActions = new ArrayList<>();
-
-        private void appendRollback(Runnable action)
-        {
-            rollbackActions.add(action);
-        }
-
-        private void rollback()
-        {
-            List<Throwable> exceptions = new ArrayList<>();
-            for (Runnable action : rollbackActions) {
-                try {
-                    action.run();
-                }
-                catch (Throwable t) {
-                    exceptions.add(t);
-                }
-            }
-            if (!exceptions.isEmpty()) {
-                TrinoException trinoException = new TrinoException(GENERIC_INTERNAL_ERROR, "Error rollback for merge");
-                exceptions.forEach(trinoException::addSuppressed);
-                throw trinoException;
-            }
-        }
-    }
-
     @Override
     public void finishMerge(
             ConnectorSession session,
@@ -788,30 +756,56 @@ public class MongoMetadata
             Collection<ComputedStatistics> computedStatistics)
     {
         MongoMergeTableHandle tableHandle = (MongoMergeTableHandle) mergeTableHandle;
-        MongoInsertTableHandle insertTableHandle = new MongoInsertTableHandle(
-                tableHandle.remoteTableName(),
-                ImmutableList.copyOf(tableHandle.columns()),
-                tableHandle.temporaryTableName(),
-                tableHandle.pageSinkIdColumnName());
-        finishInsert(session, insertTableHandle, ImmutableList.of(), fragments, computedStatistics);
+        Closer closer = Closer.create();
+        ClientSession clientSession = mongoSession.startSession();
+        clientSession.startTransaction();
+        try {
+            MongoInsertTableHandle insertTableHandle = new MongoInsertTableHandle(
+                    tableHandle.remoteTableName(),
+                    ImmutableList.copyOf(tableHandle.columns()),
+                    tableHandle.temporaryTableName(),
+                    tableHandle.pageSinkIdColumnName());
+            if (insertTableHandle.temporaryTableName().isPresent()) {
+                prepareInsert(session, clientSession, insertTableHandle.remoteTableName(), insertTableHandle.getTemporaryRemoteTableName().get(), insertTableHandle.pageSinkIdColumnName().get(), fragments, closer);
+            }
 
-        tableHandle.deleteOutputTableHandle().ifPresent(deleteOutputHandle ->
-                finishDelete(
-                        session,
-                        deleteOutputHandle.remoteTableName(),
-                        deleteOutputHandle.getTemporaryRemoteTableName().get(),
-                        deleteOutputHandle.pageSinkIdColumnName().get(),
-                        deleteOutputHandle.columns(),
-                        fragments));
+            tableHandle.deleteOutputTableHandle().ifPresent(deleteOutputHandle ->
+                    prepareDelete(
+                            session,
+                            clientSession,
+                            deleteOutputHandle.remoteTableName(),
+                            deleteOutputHandle.getTemporaryRemoteTableName().get(),
+                            deleteOutputHandle.pageSinkIdColumnName().get(),
+                            deleteOutputHandle.columns(),
+                            fragments,
+                            closer));
 
-        tableHandle.updateOutputTableHandle().ifPresent(updateOutputHandle ->
-                finishUpdate(
-                        session,
-                        updateOutputHandle.remoteTableName(),
-                        updateOutputHandle.getTemporaryRemoteTableName().get(),
-                        updateOutputHandle.pageSinkIdColumnName().get(),
-                        updateOutputHandle.columns(),
-                        fragments));
+            tableHandle.updateOutputTableHandle().ifPresent(updateOutputHandle ->
+                    finishUpdate(
+                            session,
+                            clientSession,
+                            updateOutputHandle.remoteTableName(),
+                            updateOutputHandle.getTemporaryRemoteTableName().get(),
+                            updateOutputHandle.pageSinkIdColumnName().get(),
+                            updateOutputHandle.columns(),
+                            fragments,
+                            closer));
+
+            clientSession.commitTransaction();
+        }
+        catch (Exception e) {
+            clientSession.abortTransaction();
+            throw new TrinoException(GENERIC_INTERNAL_ERROR, e);
+        }
+        finally {
+            try {
+                closer.close();
+            }
+            catch (IOException e) {
+                throw new TrinoException(GENERIC_INTERNAL_ERROR, e);
+            }
+            clientSession.close();
+        }
     }
 
     @Override
@@ -1107,24 +1101,26 @@ public class MongoMetadata
         return Optional.of(new TableFunctionApplicationResult<>(tableHandle, columnHandles));
     }
 
-    private void setInsertRollback(Runnable action)
-    {
-        checkState(insertRollbackAction.compareAndSet(null, action), "insertRollbackAction action is already set");
-    }
-
-    private void setMergeRollbackAction()
-    {
-        checkState(mergeRollbackAction.compareAndSet(null, new MergeRollbackAction()), "insertRollbackAction action is already set");
-    }
-
     public void rollback()
     {
-        if (insertRollbackAction.get() != null && mergeRollbackAction.get() != null) {
-            throw new IllegalArgumentException("Unexpected rollbacks encountered, there should exists at most one rollback action at a time, but got two");
+        if (rollbackActions.isEmpty()) {
+            return;
         }
 
-        Optional.ofNullable(insertRollbackAction.getAndSet(null)).ifPresent(Runnable::run);
-        Optional.ofNullable(mergeRollbackAction.getAndSet(null)).ifPresent(MergeRollbackAction::rollback);
+        List<Throwable> exceptions = new ArrayList<>();
+        for (Runnable action : rollbackActions) {
+            try {
+                action.run();
+            }
+            catch (Throwable t) {
+                exceptions.add(t);
+            }
+        }
+        if (!exceptions.isEmpty()) {
+            TrinoException trinoException = new TrinoException(GENERIC_INTERNAL_ERROR, "Error rollback for merge");
+            exceptions.forEach(trinoException::addSuppressed);
+            throw trinoException;
+        }
     }
 
     private static SchemaTableName getTableName(ConnectorTableHandle tableHandle)
