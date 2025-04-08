@@ -80,6 +80,7 @@ import static com.google.common.collect.MoreCollectors.toOptional;
 import static io.trino.plugin.deltalake.DeltaLakeColumnType.REGULAR;
 import static io.trino.plugin.deltalake.DeltaLakeErrorCode.DELTA_LAKE_INVALID_SCHEMA;
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.extractSchema;
+import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.getSkippingStatsColumns;
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.isDeletionVectorEnabled;
 import static io.trino.plugin.deltalake.transactionlog.TransactionLogAccess.columnsWithStats;
 import static io.trino.plugin.deltalake.transactionlog.TransactionLogParser.START_OF_MODERN_ERA_EPOCH_DAY;
@@ -194,9 +195,9 @@ public class CheckpointEntryIterator
             deletionVectorsEnabled = isDeletionVectorEnabled(this.metadataEntry, this.protocolEntry);
             checkArgument(addStatsMinMaxColumnFilter.isPresent(), "addStatsMinMaxColumnFilter must be provided when reading ADD entries from Checkpoint files");
             this.schema = extractSchema(this.metadataEntry, this.protocolEntry, typeManager);
-            Set<String> skippingStatsColumns = this.metadataEntry.getSkippingStatsColumns();
+            Set<String> skippingStatsColumns = getSkippingStatsColumns(this.metadataEntry.getSkippingStatsColumnProperty());
             checkArgument(Sets.intersection(skippingStatsColumns, ImmutableSet.copyOf(this.metadataEntry.getOriginalPartitionColumns())).isEmpty(), "Skipping stats columns must not contains partition columns");
-            this.columnsWithMinMaxStats = columnsWithStats(schema, this.metadataEntry.getOriginalPartitionColumns(), this.metadataEntry.getSkippingStatsColumns());
+            this.columnsWithMinMaxStats = columnsWithStats(schema, this.metadataEntry.getOriginalPartitionColumns(), skippingStatsColumns);
             Predicate<String> columnStatsFilterFunction = addStatsMinMaxColumnFilter.orElseThrow();
             this.columnsWithMinMaxStats = columnsWithMinMaxStats.stream()
                     .filter(column -> columnStatsFilterFunction.test(column.name()))

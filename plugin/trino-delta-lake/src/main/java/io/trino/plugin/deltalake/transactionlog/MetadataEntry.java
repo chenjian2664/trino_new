@@ -40,6 +40,7 @@ import static io.trino.plugin.deltalake.DeltaLakeErrorCode.DELTA_LAKE_INVALID_SC
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.COLUMN_MAPPING_MODE_CONFIGURATION_KEY;
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.DELETION_VECTORS_CONFIGURATION_KEY;
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.MAX_COLUMN_ID_CONFIGURATION_KEY;
+import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.getSkippingStatsColumns;
 import static java.lang.Long.parseLong;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
@@ -90,7 +91,7 @@ public class MetadataEntry
         this.configuration = configuration;
         this.createdTime = createdTime;
 
-        if (!Sets.intersection(ImmutableSet.copyOf(partitionColumns), getSkippingStatsColumns()).isEmpty()) {
+        if (!Sets.intersection(ImmutableSet.copyOf(partitionColumns), getSkippingStatsColumns(getSkippingStatsColumnProperty())).isEmpty()) {
             throw new TrinoException(DELTA_LAKE_INVALID_SCHEMA, "Partition column names cannot be skipped in stats computation");
         }
     }
@@ -180,58 +181,12 @@ public class MetadataEntry
     }
 
     @JsonIgnore
-    public Set<String> getSkippingStatsColumns()
+    public Optional<String> getSkippingStatsColumnProperty()
     {
         if (this.getConfiguration() == null) {
-            return ImmutableSet.of();
+            return Optional.empty();
         }
-
-        String value = this.getConfiguration().get(DELTA_DATA_SKIPPING_STATS_COLUMNS_PROPERTY);
-        if (value == null) {
-            return ImmutableSet.of();
-        }
-
-        return parseSkippingStatsColumns(value);
-    }
-
-    private static Set<String> parseSkippingStatsColumns(String property)
-    {
-        if (property == null || property.isEmpty()) {
-            return ImmutableSet.of();
-        }
-
-        StringBuilder current = new StringBuilder();
-        boolean inBackticks = false;
-
-        ImmutableSet.Builder<String> result = ImmutableSet.builder();
-        for (int i = 0; i < property.length(); i++) {
-            char c = property.charAt(i);
-
-            if (c == '`') {
-                inBackticks = !inBackticks;
-            }
-            else if (c == ',' && !inBackticks) {
-                String token = current.toString().trim();
-                if (!token.isEmpty()) {
-                    result.add(token);
-                }
-                current.setLength(0);
-            }
-            else {
-                current.append(c);
-            }
-        }
-
-        if (inBackticks) {
-            throw new TrinoException(DELTA_LAKE_INVALID_SCHEMA, format("Invalid value for %s property: %s", DELTA_DATA_SKIPPING_STATS_COLUMNS_PROPERTY, property));
-        }
-
-        String lastToken = current.toString().trim();
-        if (!lastToken.isEmpty()) {
-            result.add(lastToken);
-        }
-
-        return result.build();
+        return Optional.ofNullable(this.getConfiguration().get(DELTA_DATA_SKIPPING_STATS_COLUMNS_PROPERTY));
     }
 
     public static Map<String, String> configurationForNewTable(

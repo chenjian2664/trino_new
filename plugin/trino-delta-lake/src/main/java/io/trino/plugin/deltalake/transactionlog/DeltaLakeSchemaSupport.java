@@ -21,7 +21,10 @@ import com.google.common.base.Enums;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
+import com.google.common.escape.Escaper;
+import com.google.common.escape.Escapers;
 import io.airlift.json.ObjectMapperProvider;
 import io.airlift.log.Logger;
 import io.trino.plugin.deltalake.DeltaLakeColumnHandle;
@@ -58,6 +61,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
@@ -114,6 +118,9 @@ public final class DeltaLakeSchemaSupport
     // https://github.com/delta-io/delta/blob/master/docs/source/delta-uniform.md
     private static final String UNIVERSAL_FORMAT_CONFIGURATION_KEY = "delta.universalFormat.enabledFormats";
 
+    public static final String SKIP_STATS_COLUMN_CONFIGURATION_KEY = "delta.dataSkippingStatsColumns";
+    private static final Pattern NORMAL_IDENTIFIER = Pattern.compile("[a-zA-Z_][a-zA-Z0-9_]*");
+
     public enum ColumnMappingMode
     {
         ID,
@@ -155,6 +162,70 @@ public final class DeltaLakeSchemaSupport
             .buildOrThrow();
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapperProvider().get();
+
+    public static String toSkippingStatsColumnsString(Iterable<String> skippingStatsColumns)
+    {
+        Escaper escaper = Escapers.builder().addEscape('`', "``").build();
+        ImmutableSet.Builder<String> result = ImmutableSet.builder();
+        for (String column : skippingStatsColumns) {
+            if (NORMAL_IDENTIFIER.matcher(column).matches()) {
+                result.add(escaper.escape(column));
+            }
+            else {
+                result.add("`" + escaper.escape(column) + "`");
+            }
+        }
+        return String.join(",", result.build());
+    }
+
+    private static String unescape(String column) {
+        if (column.startsWith("`") && column.endsWith("`")) {
+            column = column.substring(1, column.length() - 1);
+        }
+        checkArgument(!isNullOrEmpty(column), "Invalid empty column");
+        return column.replaceAll("``", "`");
+    }
+
+    public static Set<String> getSkippingStatsColumns(Optional<String> skippingStatsColumnsProperty)
+    {
+        if (skippingStatsColumnsProperty.isEmpty()) {
+            return ImmutableSet.of();
+        }
+
+        String property = skippingStatsColumnsProperty.get();
+        StringBuilder current = new StringBuilder();
+        boolean inBackticks = false;
+
+        ImmutableSet.Builder<String> result = ImmutableSet.builder();
+        for (int i = 0; i < property.length(); i++) {
+            char c = property.charAt(i);
+
+            if (c == '`') {
+                inBackticks = !inBackticks;
+            }
+            else if (c == ',' && !inBackticks) {
+                String token = current.toString().trim();
+                if (!token.isEmpty()) {
+                    result.add(unescape(token));
+                }
+                current.setLength(0);
+            }
+            else {
+                current.append(c);
+            }
+        }
+
+        if (inBackticks) {
+            throw new TrinoException(DELTA_LAKE_INVALID_SCHEMA, format("Invalid value for %s property: %s", SKIP_STATS_COLUMN_CONFIGURATION_KEY, property));
+        }
+
+        String lastToken = current.toString().trim();
+        if (!lastToken.isEmpty()) {
+            result.add(unescape(lastToken));
+        }
+
+        return result.build();
+    }
 
     public static boolean isAppendOnly(MetadataEntry metadataEntry, ProtocolEntry protocolEntry)
     {
