@@ -196,7 +196,7 @@ public class CheckpointEntryIterator
             this.schema = extractSchema(this.metadataEntry, this.protocolEntry, typeManager);
             Set<String> skippingStatsColumns = this.metadataEntry.getSkippingStatsColumns();
             checkArgument(Sets.intersection(skippingStatsColumns, ImmutableSet.copyOf(this.metadataEntry.getOriginalPartitionColumns())).isEmpty(), "Skipping stats columns must not contains partition columns");
-            this.columnsWithMinMaxStats = columnsWithStats(schema, this.metadataEntry.getOriginalPartitionColumns());
+            this.columnsWithMinMaxStats = columnsWithStats(schema, this.metadataEntry.getOriginalPartitionColumns(), this.metadataEntry.getSkippingStatsColumns());
             Predicate<String> columnStatsFilterFunction = addStatsMinMaxColumnFilter.orElseThrow();
             this.columnsWithMinMaxStats = columnsWithMinMaxStats.stream()
                     .filter(column -> columnStatsFilterFunction.test(column.name()))
