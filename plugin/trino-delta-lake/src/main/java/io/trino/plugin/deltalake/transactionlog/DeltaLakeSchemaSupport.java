@@ -179,7 +179,8 @@ public final class DeltaLakeSchemaSupport
         return Joiner.on(",").join(result.build());
     }
 
-    private static String unescape(String column) {
+    private static String unescape(String column)
+    {
         if (column.startsWith("`") && column.endsWith("`")) {
             column = column.substring(1, column.length() - 1);
         }
