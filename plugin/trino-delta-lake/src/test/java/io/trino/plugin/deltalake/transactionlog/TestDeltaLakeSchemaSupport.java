@@ -17,6 +17,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import io.trino.plugin.deltalake.DeltaLakeColumnHandle;
 import io.trino.plugin.deltalake.DeltaLakeColumnMetadata;
 import io.trino.plugin.deltalake.DeltaLakeTable;
@@ -302,5 +303,18 @@ public class TestDeltaLakeSchemaSupport
         assertThatCode(() -> DeltaLakeSchemaSupport.validateType(new MapType(TIMESTAMP_TZ_SECONDS, TIMESTAMP_TZ_SECONDS, new TypeOperators()))).hasMessage("Unsupported type: timestamp(0) with time zone");
         assertThatCode(() -> DeltaLakeSchemaSupport.validateType(RowType.anonymous(ImmutableList.of(TIMESTAMP_TZ_SECONDS)))).hasMessage("Unsupported type: timestamp(0) with time zone");
         assertThatCode(() -> DeltaLakeSchemaSupport.validateType(new ArrayType(TIMESTAMP_TZ_SECONDS))).hasMessage("Unsupported type: timestamp(0) with time zone");
+    }
+
+    @Test
+    public void testSkippingStatsColumns()
+    {
+        assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.empty())).isEmpty();
+        assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("a,b,c"))).isEqualTo(ImmutableSet.of("a", "b", "c"));
+        assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("a, b,    c"))).isEqualTo(ImmutableSet.of("a", "b", "c"));
+        assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("`a@b`, `c$d`, e, `f,g`"))).isEqualTo(ImmutableSet.of("a@b", "c$d", "e", "f,g"));
+        assertThatCode(() -> DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("'`ab'"))).hasMessage("Invalid value for delta.dataSkippingStatsColumns property: '`ab'");
+
+        assertThat(DeltaLakeSchemaSupport.toSkippingStatsColumnsString(ImmutableSet.of("a", "b", "c"))).isEqualTo("a,b,c");
+        assertThat(DeltaLakeSchemaSupport.toSkippingStatsColumnsString(ImmutableSet.of("a@b", "c$d", "e", "f,g"))).isEqualTo("`a@b`,`c$d`,e,`f,g`");
     }
 }
