@@ -18,6 +18,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Enums;
+import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -175,7 +176,7 @@ public final class DeltaLakeSchemaSupport
                 result.add("`" + escaper.escape(column) + "`");
             }
         }
-        return String.join(",", result.build());
+        return Joiner.on(",").join(result.build());
     }
 
     private static String unescape(String column) {

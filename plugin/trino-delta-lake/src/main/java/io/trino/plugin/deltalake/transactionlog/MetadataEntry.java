@@ -55,7 +55,7 @@ public class MetadataEntry
     public static final String DELTA_CHANGE_DATA_FEED_ENABLED_PROPERTY = "delta.enableChangeDataFeed";
 
     private static final String DELTA_CHECKPOINT_INTERVAL_PROPERTY = "delta.checkpointInterval";
-    public static final String DELTA_DATA_SKIPPING_STATS_COLUMNS_PROPERTY = "delta.dataSkippingStatsColumns";
+    private static final String DELTA_DATA_SKIPPING_STATS_COLUMNS_PROPERTY = "delta.dataSkippingStatsColumns";
 
     private final String id;
     private final String name;
