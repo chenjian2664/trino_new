@@ -120,7 +120,8 @@ public final class DeltaLakeSchemaSupport
     private static final String UNIVERSAL_FORMAT_CONFIGURATION_KEY = "delta.universalFormat.enabledFormats";
 
     public static final String SKIP_STATS_COLUMN_CONFIGURATION_KEY = "delta.dataSkippingStatsColumns";
-    private static final Pattern NORMAL_IDENTIFIER = Pattern.compile("[a-zA-Z_][a-zA-Z0-9_]*");
+    private static final Pattern NORMAL_IDENTIFIER = Pattern.compile("[a-zA-Z_][a-zA-Z0-9_.]*");
+    private static final String SPECIAL_CHARS = "!@#$%^&*()_+-={}|\\[]:\";'<>,.?/";
 
     public enum ColumnMappingMode
     {
@@ -179,15 +180,6 @@ public final class DeltaLakeSchemaSupport
         return Joiner.on(",").join(result.build());
     }
 
-    private static String unescape(String column)
-    {
-        if (column.startsWith("`") && column.endsWith("`")) {
-            column = column.substring(1, column.length() - 1);
-        }
-        checkArgument(!isNullOrEmpty(column), "Invalid empty column");
-        return column.replaceAll("``", "`");
-    }
-
     public static Set<String> getSkippingStatsColumns(Optional<String> skippingStatsColumnsProperty)
     {
         if (skippingStatsColumnsProperty.isEmpty()) {
@@ -199,22 +191,19 @@ public final class DeltaLakeSchemaSupport
         boolean inBackticks = false;
 
         ImmutableSet.Builder<String> result = ImmutableSet.builder();
-        for (int i = 0; i < property.length(); i++) {
-            char c = property.charAt(i);
-
+        for (char c : property.toCharArray()) {
             if (c == '`') {
                 inBackticks = !inBackticks;
             }
             else if (c == ',' && !inBackticks) {
                 String token = current.toString().trim();
                 if (!token.isEmpty()) {
-                    result.add(unescape(token));
+                    result.add(parseColumnName(token));
                 }
                 current.setLength(0);
+                continue;
             }
-            else {
-                current.append(c);
-            }
+            current.append(c);
         }
 
         if (inBackticks) {
@@ -223,10 +212,69 @@ public final class DeltaLakeSchemaSupport
 
         String lastToken = current.toString().trim();
         if (!lastToken.isEmpty()) {
-            result.add(unescape(lastToken));
+            result.add(parseColumnName(lastToken));
         }
 
         return result.build();
+    }
+
+    /**
+     * Parses a single column name according to the rules.
+     * Special chars : !@#$%^&*()_+-={}|[]:";'<>,.?/
+     * a.b.c -> a.b.c
+     * `a.b.c` -> a\\.b\\.c
+     * `aa.b.c` -> aa\\.b\\.c
+     * a\\.b\\.c -> a\\.b\\.c
+     * `a\.b.c` -> a\\\\\\.b\\.c
+     * `abc` -> abc
+     * <p>
+     * a!b -> ERROR
+     * a\.b -> ERROR
+     * a@b -> ERROR
+     */
+    private static String parseColumnName(String name)
+    {
+        if (name.startsWith("`")) {
+            if (!name.endsWith("`")) {
+                throw new TrinoException(DELTA_LAKE_INVALID_SCHEMA, format("Invalid name in %s property: %s", SKIP_STATS_COLUMN_CONFIGURATION_KEY, name));
+            }
+
+            String content = name.substring(1, name.length() - 1);
+            content = content.replaceAll("``", "`");
+
+            StringBuilder result = new StringBuilder();
+            for (char c : content.toCharArray()) {
+                if (c == '\\') {
+                    result.append("\\\\");
+                }
+                else if (isSpecialChar(c)) {
+                    // escape special char with \
+                    result.append("\\").append(c);
+                }
+                else {
+                    result.append(c);
+                }
+            }
+            return result.toString();
+        }
+        else {
+            for (char c : name.toCharArray()) {
+                if (!isAllowedInUnquoted(c)) {
+                    throw new TrinoException(DELTA_LAKE_INVALID_SCHEMA, format("Invalid name in %s property: %s", SKIP_STATS_COLUMN_CONFIGURATION_KEY, name));
+                }
+            }
+            return name;
+        }
+    }
+
+    private static boolean isSpecialChar(char c)
+    {
+        return SPECIAL_CHARS.indexOf(c) >= 0 || c == '.';
+    }
+
+    private static boolean isAllowedInUnquoted(char c)
+    {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '.';
     }
 
     public static boolean isAppendOnly(MetadataEntry metadataEntry, ProtocolEntry protocolEntry)
@@ -657,7 +705,7 @@ public final class DeltaLakeSchemaSupport
 
     public static Map<String, Object> getColumnTypes(MetadataEntry metadataEntry)
     {
-        return getColumnProperties(metadataEntry, node -> OBJECT_MAPPER.convertValue(node.get("type"), new TypeReference<>(){}));
+        return getColumnProperties(metadataEntry, node -> OBJECT_MAPPER.convertValue(node.get("type"), new TypeReference<>() {}));
     }
 
     public static Map<String, String> getColumnComments(MetadataEntry metadataEntry)
@@ -762,7 +810,7 @@ public final class DeltaLakeSchemaSupport
 
     public static Map<String, Map<String, Object>> getColumnsMetadata(MetadataEntry metadataEntry)
     {
-        return getColumnProperties(metadataEntry, node -> OBJECT_MAPPER.convertValue(node.get("metadata"), new TypeReference<>(){}));
+        return getColumnProperties(metadataEntry, node -> OBJECT_MAPPER.convertValue(node.get("metadata"), new TypeReference<>() {}));
     }
 
     public static <T> Map<String, T> getColumnProperties(MetadataEntry metadataEntry, Function<JsonNode, T> extractor)
