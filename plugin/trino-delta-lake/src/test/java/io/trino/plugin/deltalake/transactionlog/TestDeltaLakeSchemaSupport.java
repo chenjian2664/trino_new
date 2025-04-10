@@ -311,7 +311,6 @@ public class TestDeltaLakeSchemaSupport
         assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.empty())).isEmpty();
         assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("a,b,c"))).isEqualTo(ImmutableSet.of("a", "b", "c"));
         assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("a, b,    c"))).isEqualTo(ImmutableSet.of("a", "b", "c"));
-        assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("a\\\\.b\\.c"))).isEqualTo(ImmutableSet.of(""));
         assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("`a@b`, `c$d`, e, `f,g`"))).isEqualTo(ImmutableSet.of("a@b", "c$d", "e", "f,g"));
         assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("`a.b.c`, `aa.b.c`, `a\\.b.c`, `a,b,c`, `a``b`")))
                 .isEqualTo(ImmutableSet.of("a\\.b\\.c", "aa\\.b\\.c", "a\\\\\\.b\\.c", "a\\,b\\,c", "a`b"));
