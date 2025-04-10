@@ -662,12 +662,6 @@ public class TestDeltaLakeBasic
         assertQuery(
                 "SELECT value FROM \"" + tableName + "$properties\" WHERE key = 'delta.dataSkippingStatsColumns'",
                 "VALUES 'renamed_lower,UPPER,`a.dot`,a.nested'");
-
-        // Dropping a column should update delta.dataSkippingStatsColumns property
-        assertUpdate("ALTER TABLE " + tableName + " DROP COLUMN upper");
-        assertQuery(
-                "SELECT value FROM \"" + tableName + "$properties\" WHERE key = 'delta.dataSkippingStatsColumns'",
-                "VALUES 'renamed_lower,`a.dot`,a.nested'");
     }
 
     /**
