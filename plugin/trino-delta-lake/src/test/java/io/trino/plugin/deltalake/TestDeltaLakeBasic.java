@@ -662,6 +662,19 @@ public class TestDeltaLakeBasic
         assertQuery(
                 "SELECT value FROM \"" + tableName + "$properties\" WHERE key = 'delta.dataSkippingStatsColumns'",
                 "VALUES 'renamed_lower,UPPER,`a.dot`,a.nested'");
+
+        assertUpdate("ALTER TABLE " + tableName + " RENAME COLUMN \"a.dot\" TO \"a.dot111\"");
+        assertQuery(
+                "SELECT value FROM \"" + tableName + "$properties\" WHERE key = 'delta.dataSkippingStatsColumns'",
+                "VALUES 'renamed_lower,UPPER,`a.dot111`,a.nested'");
+
+        // Dropping a column should update delta.dataSkippingStatsColumns property
+        assertUpdate("ALTER TABLE " + tableName + " DROP COLUMN \"a.dot111\" ");
+        assertQuery(
+                "SELECT value FROM \"" + tableName + "$properties\" WHERE key = 'delta.dataSkippingStatsColumns'",
+                "VALUES 'renamed_lower,UPPER,a.nested'");
+
+        assertQueryFails("ALTER TABLE " + tableName + " RENAME COLUMN a.nested TO nested11", "This connector does not support renaming fields");
     }
 
     /**

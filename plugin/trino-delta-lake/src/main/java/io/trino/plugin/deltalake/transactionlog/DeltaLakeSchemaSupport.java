@@ -18,14 +18,10 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Enums;
-import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
-import com.google.common.escape.Escaper;
-import com.google.common.escape.Escapers;
 import io.airlift.json.ObjectMapperProvider;
 import io.airlift.log.Logger;
 import io.trino.plugin.deltalake.DeltaLakeColumnHandle;
@@ -62,13 +58,13 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
-import java.util.regex.Pattern;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Streams.stream;
 import static io.trino.plugin.deltalake.DeltaLakeColumnType.PARTITION_KEY;
 import static io.trino.plugin.deltalake.DeltaLakeErrorCode.DELTA_LAKE_INVALID_SCHEMA;
@@ -82,6 +78,10 @@ import static io.trino.plugin.deltalake.transactionlog.DeltaLakeTableFeatures.IC
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeTableFeatures.IDENTITY_COLUMNS_FEATURE_NAME;
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeTableFeatures.INVARIANTS_FEATURE_NAME;
 import static io.trino.plugin.deltalake.transactionlog.MetadataEntry.DELTA_CHANGE_DATA_FEED_ENABLED_PROPERTY;
+import static io.trino.plugin.deltalake.util.SkippingStatsColumnsUtils.escapeSpecialChars;
+import static io.trino.plugin.deltalake.util.SkippingStatsColumnsUtils.getSkippingStatsColumns;
+import static io.trino.plugin.deltalake.util.SkippingStatsColumnsUtils.toSkippingStatsColumnsString;
+import static io.trino.plugin.deltalake.util.SkippingStatsColumnsUtils.toTrinoName;
 import static io.trino.spi.StandardErrorCode.DUPLICATE_COLUMN_NAME;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.type.BigintType.BIGINT;
@@ -120,8 +120,6 @@ public final class DeltaLakeSchemaSupport
     private static final String UNIVERSAL_FORMAT_CONFIGURATION_KEY = "delta.universalFormat.enabledFormats";
 
     public static final String SKIP_STATS_COLUMN_CONFIGURATION_KEY = "delta.dataSkippingStatsColumns";
-    private static final Pattern NORMAL_IDENTIFIER = Pattern.compile("[a-zA-Z_][a-zA-Z0-9_.]*");
-    private static final String SPECIAL_CHARS = "!@#$%^&*()_+-={}|\\[]:\";'<>,.?/";
 
     public enum ColumnMappingMode
     {
@@ -165,116 +163,31 @@ public final class DeltaLakeSchemaSupport
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapperProvider().get();
 
-    public static String toSkippingStatsColumnsString(Iterable<String> skippingStatsColumns)
+    public static String renameSkipStatsColumn(String skippingStatsColumnsProperty, String sourceColumn, String newColumn)
     {
-        Escaper escaper = Escapers.builder().addEscape('`', "``").build();
-        ImmutableSet.Builder<String> result = ImmutableSet.builder();
-        for (String column : skippingStatsColumns) {
-            if (NORMAL_IDENTIFIER.matcher(column).matches()) {
-                result.add(escaper.escape(column));
-            }
-            else {
-                result.add("`" + escaper.escape(column) + "`");
-            }
+        String sourceColumnName = escapeSpecialChars(sourceColumn);
+        String newColumnName = escapeSpecialChars(newColumn);
+
+        Set<String> skippingStatsColumns = getSkippingStatsColumns(Optional.of(skippingStatsColumnsProperty));
+        if (!skippingStatsColumns.contains(sourceColumnName)) {
+            return skippingStatsColumnsProperty;
         }
-        return Joiner.on(",").join(result.build());
+
+        return toSkippingStatsColumnsString(skippingStatsColumns.stream()
+                .map(name -> !name.equalsIgnoreCase(sourceColumnName) ? name : newColumnName)
+                .collect(toImmutableSet()));
     }
 
-    public static Set<String> getSkippingStatsColumns(Optional<String> skippingStatsColumnsProperty)
+    public static String dropSkipStatsColumn(String skippingStatsColumnsProperty, String dropColumn)
     {
-        if (skippingStatsColumnsProperty.isEmpty()) {
-            return ImmutableSet.of();
+        Set<String> skippingStatsColumns = getSkippingStatsColumns(Optional.of(skippingStatsColumnsProperty));
+        String dropColumnName = escapeSpecialChars(dropColumn);
+        if (!skippingStatsColumns.contains(dropColumnName)) {
+            return skippingStatsColumnsProperty;
         }
-
-        String property = skippingStatsColumnsProperty.get();
-        StringBuilder current = new StringBuilder();
-        boolean inBackticks = false;
-
-        ImmutableSet.Builder<String> result = ImmutableSet.builder();
-        for (char c : property.toCharArray()) {
-            if (c == '`') {
-                inBackticks = !inBackticks;
-            }
-            else if (c == ',' && !inBackticks) {
-                String token = current.toString().trim();
-                if (!token.isEmpty()) {
-                    result.add(parseColumnName(token));
-                }
-                current.setLength(0);
-                continue;
-            }
-            current.append(c);
-        }
-
-        if (inBackticks) {
-            throw new TrinoException(DELTA_LAKE_INVALID_SCHEMA, format("Invalid value for %s property: %s", SKIP_STATS_COLUMN_CONFIGURATION_KEY, property));
-        }
-
-        String lastToken = current.toString().trim();
-        if (!lastToken.isEmpty()) {
-            result.add(parseColumnName(lastToken));
-        }
-
-        return result.build();
-    }
-
-    /**
-     * Parses a single column name according to the rules.
-     * Special chars : !@#$%^&*()_+-={}|[]:";'<>,.?/
-     * a.b.c -> a.b.c
-     * `a.b.c` -> a\\.b\\.c
-     * `aa.b.c` -> aa\\.b\\.c
-     * a\\.b\\.c -> a\\.b\\.c
-     * `a\.b.c` -> a\\\\\\.b\\.c
-     * `abc` -> abc
-     * <p>
-     * a!b -> ERROR
-     * a\.b -> ERROR
-     * a@b -> ERROR
-     */
-    private static String parseColumnName(String name)
-    {
-        if (name.startsWith("`")) {
-            if (!name.endsWith("`")) {
-                throw new TrinoException(DELTA_LAKE_INVALID_SCHEMA, format("Invalid name in %s property: %s", SKIP_STATS_COLUMN_CONFIGURATION_KEY, name));
-            }
-
-            String content = name.substring(1, name.length() - 1);
-            content = content.replaceAll("``", "`");
-
-            StringBuilder result = new StringBuilder();
-            for (char c : content.toCharArray()) {
-                if (c == '\\') {
-                    result.append("\\\\");
-                }
-                else if (isSpecialChar(c)) {
-                    // escape special char with \
-                    result.append("\\").append(c);
-                }
-                else {
-                    result.append(c);
-                }
-            }
-            return result.toString();
-        }
-        else {
-            for (char c : name.toCharArray()) {
-                if (!isAllowedInUnquoted(c)) {
-                    throw new TrinoException(DELTA_LAKE_INVALID_SCHEMA, format("Invalid name in %s property: %s", SKIP_STATS_COLUMN_CONFIGURATION_KEY, name));
-                }
-            }
-            return name;
-        }
-    }
-
-    private static boolean isSpecialChar(char c)
-    {
-        return SPECIAL_CHARS.indexOf(c) >= 0 || c == '.';
-    }
-
-    private static boolean isAllowedInUnquoted(char c)
-    {
-        return Character.isLetterOrDigit(c) || c == '_' || c == '.';
+        return toSkippingStatsColumnsString(skippingStatsColumns.stream()
+                .filter(name -> !name.equalsIgnoreCase(dropColumnName))
+                .collect(toImmutableSet()));
     }
 
     public static boolean isAppendOnly(MetadataEntry metadataEntry, ProtocolEntry protocolEntry)

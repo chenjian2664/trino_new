@@ -39,7 +39,8 @@ import static io.trino.plugin.deltalake.DeltaLakeErrorCode.DELTA_LAKE_INVALID_SC
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.COLUMN_MAPPING_MODE_CONFIGURATION_KEY;
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.DELETION_VECTORS_CONFIGURATION_KEY;
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.MAX_COLUMN_ID_CONFIGURATION_KEY;
-import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.getSkippingStatsColumns;
+import static io.trino.plugin.deltalake.util.SkippingStatsColumnsUtils.getSkippingStatsColumns;
+import static io.trino.plugin.deltalake.util.SkippingStatsColumnsUtils.toSkippingStatsColumnsString;
 import static java.lang.Long.parseLong;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
@@ -191,6 +192,7 @@ public class MetadataEntry
     public static Map<String, String> configurationForNewTable(
             Optional<Long> checkpointInterval,
             Optional<Boolean> changeDataFeedEnabled,
+            Optional<String> skippingStatsColumnProperty,
             boolean deletionVectorsEnabled,
             ColumnMappingMode columnMappingMode,
             OptionalInt maxFieldId)
@@ -198,6 +200,7 @@ public class MetadataEntry
         ImmutableMap.Builder<String, String> configurationMapBuilder = ImmutableMap.builder();
         checkpointInterval.ifPresent(interval -> configurationMapBuilder.put(DELTA_CHECKPOINT_INTERVAL_PROPERTY, String.valueOf(interval)));
         changeDataFeedEnabled.ifPresent(enabled -> configurationMapBuilder.put(DELTA_CHANGE_DATA_FEED_ENABLED_PROPERTY, String.valueOf(enabled)));
+        skippingStatsColumnProperty.ifPresent(columns -> configurationMapBuilder.put(DELTA_DATA_SKIPPING_STATS_COLUMNS_PROPERTY, toSkippingStatsColumnsString(getSkippingStatsColumns(Optional.of(columns)))));
         configurationMapBuilder.put(DELETION_VECTORS_CONFIGURATION_KEY, Boolean.toString(deletionVectorsEnabled));
         switch (columnMappingMode) {
             case NONE -> { /* do nothing */ }

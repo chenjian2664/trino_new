@@ -5485,4 +5485,27 @@ public class TestDeltaLakeConnectorTest
             assertQuery("SELECT COUNT(*) FROM " + table.getName(), "VALUES " + size);
         }
     }
+
+    @Test
+    public void testSkippingStatsColumns()
+    {
+        try (TestTable table = newTrinoTable("test_skipping_stats_columns",
+                "(id int, \"a.dot\" int, \"a$bc\" int, a row(nested int, nested2 int), abc int) WITH (column_mapping_mode = 'name', skipping_stats_columns = '`a.dot`,a.nested')")) {
+            assertQueryReturnsEmptyResult("SELECT * FROM " + table.getName());
+            assertQuery("SELECT value FROM \"" + table.getName() + "$properties\" WHERE key = 'delta.dataSkippingStatsColumns'",
+                    "Values '`a.dot`,a.nested'");
+
+            assertUpdate("ALTER TABLE " + table.getName() + " ADD COLUMN col int");
+            assertQuery("SELECT value FROM \"" + table.getName() + "$properties\" WHERE key = 'delta.dataSkippingStatsColumns'",
+                    "Values '`a.dot`,a.nested'");
+
+            assertUpdate("ALTER TABLE " + table.getName() + " RENAME COLUMN \"a.dot\" TO \"a.dot111\"");
+            assertQuery("SELECT value FROM \"" + table.getName() + "$properties\" WHERE key = 'delta.dataSkippingStatsColumns'",
+                    "Values '`a.dot111`,a.nested'");
+
+            assertUpdate("ALTER TABLE " + table.getName() + " DROP COLUMN \"a.dot111\"");
+            assertQuery("SELECT value FROM \"" + table.getName() + "$properties\" WHERE key = 'delta.dataSkippingStatsColumns'",
+                    "Values 'a.nested'");
+        }
+    }
 }

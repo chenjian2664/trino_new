@@ -17,7 +17,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import io.trino.plugin.deltalake.DeltaLakeColumnHandle;
 import io.trino.plugin.deltalake.DeltaLakeColumnMetadata;
 import io.trino.plugin.deltalake.DeltaLakeTable;
@@ -306,17 +305,45 @@ public class TestDeltaLakeSchemaSupport
     }
 
     @Test
-    public void testSkippingStatsColumns()
+    public void testRenameSkipStatsColumns()
     {
-        assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.empty())).isEmpty();
-        assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("a,b,c"))).isEqualTo(ImmutableSet.of("a", "b", "c"));
-        assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("a, b,    c"))).isEqualTo(ImmutableSet.of("a", "b", "c"));
-        assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("`a@b`, `c$d`, e, `f,g`"))).isEqualTo(ImmutableSet.of("a@b", "c$d", "e", "f,g"));
-        assertThat(DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("`a.b.c`, `aa.b.c`, `a\\.b.c`, `a,b,c`, `a``b`")))
-                .isEqualTo(ImmutableSet.of("a\\.b\\.c", "aa\\.b\\.c", "a\\\\\\.b\\.c", "a\\,b\\,c", "a`b"));
-        assertThatCode(() -> DeltaLakeSchemaSupport.getSkippingStatsColumns(Optional.of("'`ab'"))).hasMessage("Invalid value for delta.dataSkippingStatsColumns property: '`ab'");
+        assertThat(DeltaLakeSchemaSupport.renameSkipStatsColumn("a,b,c", "a", "renamed"))
+                .isEqualTo("renamed,b,c");
+        assertThat(DeltaLakeSchemaSupport.renameSkipStatsColumn("a,b,c", "not_found", "renamed"))
+                .isEqualTo("a,b,c");
+        assertThat(DeltaLakeSchemaSupport.renameSkipStatsColumn("case_sensitive", "Case_Sensitive", "renamed"))
+                .isEqualTo("case_sensitive");
 
-        assertThat(DeltaLakeSchemaSupport.toSkippingStatsColumnsString(ImmutableSet.of("a", "b", "c"))).isEqualTo("a,b,c");
-        assertThat(DeltaLakeSchemaSupport.toSkippingStatsColumnsString(ImmutableSet.of("a@b", "c$d", "e", "f,g"))).isEqualTo("`a@b`,`c$d`,e,`f,g`");
+//        // TODO: support
+//        // Delta Lake allows leaf fields of a struct type in delta.dataSkippingStatsColumns
+//        assertThat(DeltaLakeSchemaSupport.renameSkipStatsColumn("struct.child", "struct", "renamed"))
+//                .isEqualTo("renamed.child");
+//
+        // Source column name contains a comma that requires escaping
+        assertThat(DeltaLakeSchemaSupport.renameSkipStatsColumn("`a,comma`", "a,comma", "a,renamed"))
+                .isEqualTo("`a,renamed`");
+
+        // Target column name contains a comma that requires escaping
+        assertThat(DeltaLakeSchemaSupport.renameSkipStatsColumn("a", "a", "a,comma"))
+                .isEqualTo("`a,comma`");
+    }
+
+    @Test
+    public void testDropSkipStatsColumns()
+    {
+        assertThat(DeltaLakeSchemaSupport.dropSkipStatsColumn("a,b,c", "a"))
+                .isEqualTo("b,c");
+        assertThat(DeltaLakeSchemaSupport.dropSkipStatsColumn("a,b,c", "not_found"))
+                .isEqualTo("a,b,c");
+        assertThat(DeltaLakeSchemaSupport.dropSkipStatsColumn("case_sensitive", "Case_Sensitive"))
+                .isEqualTo("case_sensitive");
+
+        // Target column name contains a comma that requires escaping
+        assertThat(DeltaLakeSchemaSupport.dropSkipStatsColumn("`a,comma`", "a,comma"))
+                .isEmpty();
+
+        // Non-dropped table should preserve the escaped character
+        assertThat(DeltaLakeSchemaSupport.dropSkipStatsColumn("a,`b,comma`", "a"))
+                .isEqualTo("`b,comma`");
     }
 }
