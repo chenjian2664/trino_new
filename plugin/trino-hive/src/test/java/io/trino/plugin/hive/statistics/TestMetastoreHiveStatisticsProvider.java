@@ -853,7 +853,7 @@ public class TestMetastoreHiveStatisticsProvider
 
     private static HivePartition partition(String name)
     {
-        return parsePartition(TABLE, name, ImmutableList.of(PARTITION_COLUMN_1, PARTITION_COLUMN_2));
+        return parsePartition(TABLE, name, ImmutableList.of(PARTITION_COLUMN_1, PARTITION_COLUMN_2), Optional.empty());
     }
 
     private static PartitionStatistics rowsCount(long rowsCount)

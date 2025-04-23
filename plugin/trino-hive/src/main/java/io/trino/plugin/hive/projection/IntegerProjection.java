@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.hive.projection;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
 import io.trino.spi.predicate.Domain;
@@ -36,7 +37,7 @@ import static io.trino.spi.predicate.Domain.singleValue;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
-final class IntegerProjection
+public final class IntegerProjection
         implements Projection
 {
     private final String columnName;
@@ -44,6 +45,16 @@ final class IntegerProjection
     private final int rightBound;
     private final int interval;
     private final Optional<Integer> digits;
+
+    @JsonCreator
+    public IntegerProjection()
+    {
+        this.columnName = null;
+        this.leftBound = 0;
+        this.rightBound = 0;
+        this.interval = 1;
+        this.digits = Optional.empty();
+    }
 
     public IntegerProjection(String columnName, Type columnType, Map<String, Object> columnProperties)
     {

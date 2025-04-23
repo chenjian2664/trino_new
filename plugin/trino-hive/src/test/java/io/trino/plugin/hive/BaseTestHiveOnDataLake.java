@@ -918,6 +918,66 @@ abstract class BaseTestHiveOnDataLake
     }
 
     @Test
+    public void testDatePartitionProjectionWithFormat()
+    {
+        String tableName = "partition_projection_custom_date" + randomNameSuffix();
+        String fullyQualifiedTestTableName = getFullyQualifiedTestTableName(tableName);
+
+        computeActual(
+                "CREATE TABLE " + fullyQualifiedTestTableName + " ( " +
+                        "  name varchar(25), " +
+                        "  comment varchar(152), " +
+                        "  dt DATE WITH (" +
+                        "    partition_projection_format='yyyy/MM/dd',\n" +
+                        "    partition_projection_interval=1,\n" +
+                        "    partition_projection_interval_unit='DAYS', \n" +
+                        "    partition_projection_range=ARRAY['2025/01/01', '2025/01/30'], \n" +
+                        "    partition_projection_type='date'" +
+                        "  ), " +
+                        "  ts timestamp WITH (" +
+                        "    partition_projection_type='date', " +
+                        "    partition_projection_format='yyyy/MM/dd HH@mm@ss', " +
+                        "    partition_projection_range=ARRAY['2025/1/20 00@00@00', '2025/1/21 00@00@00'], " +
+                        "    partition_projection_interval=1, " +
+                        "    partition_projection_interval_unit='HOURS'" +
+                        "  )" +
+                        ") WITH ( " +
+                        "  partitioned_by=ARRAY['dt','ts'], " +
+                        "  partition_projection_enabled=true " +
+                        ")");
+
+        assertThat(
+                hiveMinioDataLake
+                        .runOnHive("SHOW TBLPROPERTIES " + getHiveTestTableName(tableName)))
+                .containsPattern("[ |]+projection\\.enabled[ |]+true[ |]+")
+                .containsPattern("[ |]+projection\\.dt\\.type[ |]+date[ |]+")
+                .containsPattern("[ |]+projection\\.dt\\.format[ |]+yyyy/MM/dd[ |]+")
+                .containsPattern("[ |]+projection\\.dt\\.interval.unit[ |]+days[ |]+")
+                .containsPattern("[ |]+projection\\.dt\\.range[ |]+2025/01/01,2025/01/30[ |]+")
+                .containsPattern("[ |]+projection\\.ts\\.type[ |]+date[ |]+")
+                .containsPattern("[ |]+projection\\.ts\\.format[ |]+yyyy/MM/dd HH@mm@ss[ |]+")
+                .containsPattern("[ |]+projection\\.ts\\.interval.unit[ |]+hours[ |]+")
+                .containsPattern("[ |]+projection\\.ts\\.range[ |]+2025/1/20 00@00@00,2025/1/21 00@00@00[ |]+");
+
+        computeActual(createInsertStatement(
+                fullyQualifiedTestTableName,
+                ImmutableList.of(
+                        ImmutableList.of("'POLAND_1'", "'Comment'", "DATE '2025-1-23'", "TIMESTAMP '2025-1-20 01:00:00'"),
+                        ImmutableList.of("'POLAND_2'", "'Comment'", "DATE '2025-1-23'", "TIMESTAMP '2025-1-20 02:00:00'"),
+                        ImmutableList.of("'CZECH_2'", "'Comment'", "DATE '2025-1-24'", "TIMESTAMP '2025-1-20 10:00:00'"))));
+
+        assertQuery("SELECT * FROM " + fullyQualifiedTestTableName + " WHERE name = 'POLAND_1'", "VALUES ('POLAND_1', 'Comment', DATE '2025-01-23', TIMESTAMP '2025-01-20 01:00:00')");
+
+        assertQuery("SELECT * FROM " + fullyQualifiedTestTableName + " WHERE dt = DATE '2025-01-23'",
+                "VALUES ('POLAND_1', 'Comment', DATE '2025-01-23', TIMESTAMP '2025-01-20 01:00:00')," +
+                        "('POLAND_2', 'Comment', DATE '2025-01-23', TIMESTAMP '2025-01-20 02:00:00')");
+        assertQuery("SELECT * FROM " + fullyQualifiedTestTableName + " WHERE dt = DATE '2025-01-23' AND ts > TIMESTAMP '2025-1-20 01:00:00'", "VALUES ('POLAND_2', 'Comment', DATE '2025-01-23', TIMESTAMP '2025-01-20 02:00:00')");
+        assertQuery("SELECT * FROM " + fullyQualifiedTestTableName + " WHERE dt IN (DATE '2025-01-23', DATE '2025-01-24', DATE '2025-01-25') AND ts > TIMESTAMP '2025-1-20 01:00:00'",
+                "VALUES ('POLAND_2', 'Comment', DATE '2025-01-23', TIMESTAMP '2025-01-20 02:00:00')," +
+                        "('CZECH_2', 'Comment', DATE '2025-1-24', TIMESTAMP '2025-1-20 10:00:00')");
+    }
+
+    @Test
     public void testDatePartitionProjectionOnDateColumnWithDefaults()
     {
         String tableName = "nation_" + randomNameSuffix();
@@ -1160,6 +1220,7 @@ abstract class BaseTestHiveOnDataLake
                         ImmutableList.of("'CZECH_2'", "'Comment'", "3", "5", "'CZ1'", "TIMESTAMP '" + minutes3AgoFormatted + "'"),
                         ImmutableList.of("'CZECH_3'", "'Comment'", "4", "5", "'CZ1'", "TIMESTAMP '" + minutes4AgoFormatted + "'"))));
 
+        System.out.println("Partitons: " + minutesNowFormatted + ", " + minutes1AgoFormatter + ", " + minutes2AgoFormatted + ", " + minutes3AgoFormatted + ", " + minutes4AgoFormatted);
         assertQuery(
                 format("SELECT name FROM %s WHERE short_name2 > ( TIMESTAMP '%s' ) AND short_name2 <= ( TIMESTAMP '%s' )", fullyQualifiedTestTableName, minutes4AgoFormatted, minutes1AgoFormatter),
                 "VALUES ('POLAND_2'), ('CZECH_1'), ('CZECH_2')");

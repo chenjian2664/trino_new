@@ -19,6 +19,8 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.trino.metastore.Column;
 import io.trino.metastore.Table;
+import io.trino.plugin.hive.HiveColumnHandle;
+import io.trino.plugin.hive.HiveTableHandle;
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.connector.ConnectorTableMetadata;
 import io.trino.spi.type.Type;
@@ -35,6 +37,7 @@ import java.util.stream.Collectors;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.trino.plugin.hive.HiveTableProperties.getPartitionedBy;
 import static io.trino.plugin.hive.HiveTimestampPrecision.DEFAULT_PRECISION;
 import static io.trino.plugin.hive.util.HiveTypeUtil.getType;
@@ -51,9 +54,9 @@ public final class PartitionProjectionProperties
     private static final String COLUMN_PROJECTION_DIGITS_SUFFIX = "digits";
     private static final String COLUMN_PROJECTION_FORMAT_SUFFIX = "format";
     private static final String METASTORE_PROPERTY_PROJECTION_INTERVAL_UNIT_SUFFIX = "interval.unit";
-    private static final String METASTORE_PROPERTY_PROJECTION_ENABLED = "projection.enabled";
+    public static final String METASTORE_PROPERTY_PROJECTION_ENABLED = "projection.enabled";
     private static final String METASTORE_PROPERTY_PROJECTION_LOCATION_TEMPLATE = "storage.location.template";
-    private static final String METASTORE_PROPERTY_PROJECTION_IGNORE = "trino.partition_projection.ignore";
+    public static final String METASTORE_PROPERTY_PROJECTION_IGNORE = "trino.partition_projection.ignore";
     private static final String PROPERTY_KEY_PREFIX = "partition_projection_";
 
     public static final String COLUMN_PROJECTION_FORMAT = PROPERTY_KEY_PREFIX + COLUMN_PROJECTION_FORMAT_SUFFIX;
@@ -184,6 +187,38 @@ public final class PartitionProjectionProperties
                 .anyMatch(propertyKey -> propertyKey.startsWith(PROPERTY_KEY_PREFIX));
     }
 
+    public static Optional<PartitionProjection> getPartitionProjectionFromHiveTable(HiveTableHandle tableHandle)
+    {
+        return createPartitionProjection(tableHandle.getDataColumns(), tableHandle.getPartitionColumns(), tableHandle.getTableParameters());
+    }
+
+    public static Optional<PartitionProjection> createPartitionProjection(List<HiveColumnHandle> dataColumns, List<HiveColumnHandle> partitionColumns, Optional<Map<String, String>> tableParameters)
+    {
+        if (partitionColumns.isEmpty() || tableParameters.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Map<String, String> parameters = tableParameters.orElseThrow();
+
+        if (parseBoolean(parameters.get(METASTORE_PROPERTY_PROJECTION_IGNORE)) ||
+                !parseBoolean(parameters.get(METASTORE_PROPERTY_PROJECTION_ENABLED))) {
+            return Optional.empty();
+        }
+
+        Set<String> partitionColumnNames = partitionColumns.stream()
+                .map(HiveColumnHandle::getName)
+                .collect(toImmutableSet());
+
+        List<String> columns = dataColumns.stream()
+                .map(HiveColumnHandle::getName)
+                .filter(partitionColumnNames::contains)
+                .collect(toImmutableList());
+        Map<String, Type> partitionColumnTypes = partitionColumns.stream()
+                .collect(toImmutableMap(HiveColumnHandle::getName, HiveColumnHandle::getType));
+
+        return createPartitionProjection(columns, partitionColumnTypes, parameters);
+    }
+
     public static Optional<PartitionProjection> getPartitionProjectionFromTable(Table table, TypeManager typeManager)
     {
         Map<String, String> tableProperties = table.getParameters();
@@ -203,7 +238,7 @@ public final class PartitionProjectionProperties
                 tableProperties);
     }
 
-    private static Optional<PartitionProjection> createPartitionProjection(List<String> dataColumns, Map<String, Type> partitionColumns, Map<String, String> tableProperties)
+    public static Optional<PartitionProjection> createPartitionProjection(List<String> dataColumns, Map<String, Type> partitionColumns, Map<String, String> tableProperties)
     {
         // This method is used during table creation to validate the properties. The validation is performed even if the projection is disabled.
         boolean enabled = parseBoolean(tableProperties.get(METASTORE_PROPERTY_PROJECTION_ENABLED));
