@@ -152,7 +152,7 @@ public final class HiveUtil
 
     private static final LocalDateTime EPOCH_DAY = new LocalDateTime(1970, 1, 1, 0, 0);
     private static final DateTimeFormatter HIVE_DATE_PARSER;
-    private static final DateTimeFormatter HIVE_TIMESTAMP_PARSER;
+    public static final DateTimeFormatter HIVE_TIMESTAMP_PARSER;
 
     private static final String BIG_DECIMAL_POSTFIX = "BD";
 

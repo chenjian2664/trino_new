@@ -36,12 +36,17 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
+import java.util.Calendar;
 import java.util.Date;
+import java.util.GregorianCalendar;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TimeZone;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -55,9 +60,13 @@ import static io.trino.plugin.hive.projection.PartitionProjectionProperties.COLU
 import static io.trino.plugin.hive.projection.PartitionProjectionProperties.COLUMN_PROJECTION_RANGE;
 import static io.trino.plugin.hive.projection.PartitionProjectionProperties.getProjectionPropertyRequiredValue;
 import static io.trino.plugin.hive.projection.PartitionProjectionProperties.getProjectionPropertyValue;
+import static io.trino.plugin.hive.util.HiveUtil.HIVE_TIMESTAMP_PARSER;
+import static io.trino.plugin.hive.util.HiveWriteUtils.HIVE_DATE_FORMATTER;
+import static io.trino.plugin.hive.util.HiveWriteUtils.HIVE_TIMESTAMP_FORMATTER;
 import static io.trino.spi.predicate.Domain.singleValue;
 import static io.trino.spi.type.DateType.DATE;
 import static io.trino.spi.type.TimestampType.TIMESTAMP_MILLIS;
+import static io.trino.spi.type.Timestamps.MICROSECONDS_PER_MILLISECOND;
 import static io.trino.spi.type.Timestamps.MICROSECONDS_PER_SECOND;
 import static io.trino.spi.type.Timestamps.NANOSECONDS_PER_MICROSECOND;
 import static java.lang.Math.floorDiv;
@@ -226,6 +235,10 @@ public final class DateProjection
 
         if (TIMESTAMP_MILLIS.equals(columnType)) {
             long epochMilli = dateFormat.parse(value).toInstant().toEpochMilli();
+            if (MILLISECONDS.toMicros(epochMilli) != HIVE_TIMESTAMP_PARSER.parseMillis(value) * MICROSECONDS_PER_MILLISECOND) {
+                throw new RuntimeException("xxxx!!! : " + value + ", " + HIVE_TIMESTAMP_PARSER.parseMillis(value) * MICROSECONDS_PER_MILLISECOND + ", my: " + MILLISECONDS.toMicros(epochMilli));
+            }
+//            System.out.println("MARK, read: " + MILLISECONDS.toMicros(epochMilli) + ", old read:" + HIVE_TIMESTAMP_PARSER.parseMillis(value) * MICROSECONDS_PER_MILLISECOND + ", value: " + value);
             return NullableValue.of(TIMESTAMP_MILLIS, MILLISECONDS.toMicros(epochMilli));
         }
 
@@ -246,17 +259,34 @@ public final class DateProjection
 
         if (DATE.equals(columnType)) {
             LocalDate localDate = LocalDate.ofEpochDay((int) value);
-            Instant instant = localDate.atStartOfDay(UTC_TIME_ZONE_ID).toInstant();
-            return Optional.of(formatValue(instant));
+            Calendar calendar = new GregorianCalendar(TimeZone.getTimeZone(UTC_TIME_ZONE_ID));
+            // Clear all fields to avoid leftover values
+            calendar.clear();
+            // Set year/month/day individually to avoid DST/carryover issues
+            calendar.set(Calendar.YEAR, localDate.getYear());
+            // Calendar months are 0-based (JANUARY = 0), but LocalDate.getMonthValue() is 1-based (January = 1),
+            // so we subtract 1 to convert to the correct Calendar month index.
+            calendar.set(Calendar.MONTH, localDate.getMonthValue() - 1);
+            calendar.set(Calendar.DAY_OF_MONTH, localDate.getDayOfMonth());
+            Date date = calendar.getTime();
+            String my = dateFormat.format(date);
+            String his = LocalDate.ofEpochDay((int) value).format(HIVE_DATE_FORMATTER);
+            if (!Objects.equals(my, his)) {
+                throw new RuntimeException("yyyy!!! date : value " + value + ", [" + my + "], his write: [" + his + "]");
+            }
+            return Optional.of(my);
         }
 
         if (TIMESTAMP_MILLIS.equals(columnType)) {
             long epochMicros = (long) value;
             long epochSeconds = floorDiv(epochMicros, MICROSECONDS_PER_SECOND);
             int nanosOfSecond = floorMod(epochMicros, MICROSECONDS_PER_SECOND) * NANOSECONDS_PER_MICROSECOND;
-            Instant instant = LocalDateTime.ofEpochSecond(epochSeconds, nanosOfSecond, ZoneOffset.UTC).toInstant(ZoneOffset.UTC);
-            System.out.println("MARK, to partition value :" + formatValue(instant));
-            return Optional.of(formatValue(instant));
+            String my = dateFormat.format(new Date(TimeUnit.MICROSECONDS.toMillis(epochMicros)));
+            String his = LocalDateTime.ofEpochSecond(epochSeconds, nanosOfSecond, ZoneOffset.UTC).format(HIVE_TIMESTAMP_FORMATTER);
+            if (!Objects.equals(my, his)) {
+                throw new RuntimeException("yyyy!!! : value " + value + ", [" + my + "], his write: [" + his + "]");
+            }
+            return Optional.of(my);
         }
 
         throw new InvalidProjectionException(columnName, columnType);
