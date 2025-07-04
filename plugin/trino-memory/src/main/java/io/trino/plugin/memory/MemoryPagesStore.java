@@ -37,6 +37,7 @@ import java.util.stream.IntStream;
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.trino.plugin.memory.MemoryErrorCode.MEMORY_LIMIT_EXCEEDED;
 import static io.trino.plugin.memory.MemoryErrorCode.MISSING_DATA;
+import static io.trino.spi.type.VarcharType.VARCHAR;
 import static java.lang.String.format;
 
 @ThreadSafe
@@ -117,7 +118,14 @@ public class MemoryPagesStore
                 done = true;
             }
             // Append missing columns with null values. This situation happens when a new column is added without additional insert.
-            for (int j = page.getChannelCount(); j < columnIndexes.length; j++) {
+            // The new added columns is behind the row_id column, so add the row_id block first
+            int channelCount = page.getChannelCount();
+            if (channelCount <= columnIndexes.length) {
+                BlockBuilder builder = VARCHAR.createBlockBuilder(null, page.getPositionCount());
+                IntStream.range(0, page.getPositionCount()).forEach(_ -> builder.appendNull());
+                page = page.appendColumn(builder.build());
+            }
+            for (int j = channelCount; j < columnIndexes.length; j++) {
                 Type type = columnTypes.get(j);
                 BlockBuilder builder = type.createBlockBuilder(null, page.getPositionCount());
                 IntStream.range(0, page.getPositionCount()).forEach(_ -> builder.appendNull());

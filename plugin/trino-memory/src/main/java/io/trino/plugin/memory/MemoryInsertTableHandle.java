@@ -20,7 +20,7 @@ import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 
-public record MemoryInsertTableHandle(long table, InsertMode mode, Set<Long> activeTableIds)
+public record MemoryInsertTableHandle(long table, InsertMode mode, Set<Long> activeTableIds, int rowIdIndex)
         implements ConnectorInsertTableHandle
 {
     public enum InsertMode

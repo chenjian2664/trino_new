@@ -27,6 +27,7 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static com.google.common.collect.MoreCollectors.onlyElement;
+import static io.trino.plugin.memory.MemoryMetadata.ROW_ID;
 import static java.util.Collections.emptyMap;
 import static java.util.Objects.requireNonNull;
 
@@ -60,6 +61,7 @@ public record TableInfo(
         return new ConnectorTableMetadata(
                 new SchemaTableName(schemaName, tableName),
                 columns.stream()
+                        .filter(columnInfo -> !columnInfo.handle().name().equals(ROW_ID))
                         .map(ColumnInfo::getMetadata)
                         .collect(Collectors.toList()),
                 emptyMap(),

@@ -17,10 +17,13 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Inject;
 import io.airlift.slice.Slice;
+import io.airlift.slice.Slices;
 import io.trino.plugin.memory.MemoryInsertTableHandle.InsertMode;
 import io.trino.spi.HostAddress;
 import io.trino.spi.NodeManager;
 import io.trino.spi.Page;
+import io.trino.spi.block.Block;
+import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.connector.ConnectorInsertTableHandle;
 import io.trino.spi.connector.ConnectorOutputTableHandle;
 import io.trino.spi.connector.ConnectorPageSink;
@@ -32,9 +35,11 @@ import io.trino.spi.connector.ConnectorTransactionHandle;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Preconditions.checkState;
+import static io.trino.spi.type.VarcharType.VARCHAR;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
@@ -66,7 +71,7 @@ public class MemoryPageSinkProvider
 
         pagesStore.cleanUp(memoryOutputTableHandle.activeTableIds());
         pagesStore.initialize(tableId);
-        return new MemoryPageSink(pagesStore, currentHostAddress, tableId);
+        return new MemoryPageSink(pagesStore, currentHostAddress, tableId, memoryOutputTableHandle.rowIdIndex());
     }
 
     @Override
@@ -82,7 +87,7 @@ public class MemoryPageSinkProvider
 
         pagesStore.cleanUp(memoryInsertTableHandle.activeTableIds());
         pagesStore.initialize(tableId);
-        return new MemoryPageSink(pagesStore, currentHostAddress, tableId);
+        return new MemoryPageSink(pagesStore, currentHostAddress, tableId, memoryInsertTableHandle.rowIdIndex());
     }
 
     private static class MemoryPageSink
@@ -91,20 +96,60 @@ public class MemoryPageSinkProvider
         private final MemoryPagesStore pagesStore;
         private final HostAddress currentHostAddress;
         private final long tableId;
+        private final int rowIdIndex;
         private final List<Page> appendedPages = new ArrayList<>();
 
-        public MemoryPageSink(MemoryPagesStore pagesStore, HostAddress currentHostAddress, long tableId)
+        public MemoryPageSink(MemoryPagesStore pagesStore, HostAddress currentHostAddress, long tableId, int rowIdIndex)
         {
             this.pagesStore = requireNonNull(pagesStore, "pagesStore is null");
             this.currentHostAddress = requireNonNull(currentHostAddress, "currentHostAddress is null");
             this.tableId = tableId;
+            this.rowIdIndex = rowIdIndex;
         }
 
         @Override
         public CompletableFuture<?> appendPage(Page page)
         {
-            appendedPages.add(page);
+            appendedPages.add(addRowId(page));
             return NOT_BLOCKED;
+        }
+
+        private Page addRowId(Page page)
+        {
+            int channelCount = page.getChannelCount();
+            int positionCount = page.getPositionCount();
+            Block[] blocks = new Block[channelCount + 1];
+            if (rowIdIndex == channelCount) {
+                for (int channel = 0; channel < channelCount; channel++) {
+                    blocks[channel] = page.getBlock(channel);
+                }
+                blocks[rowIdIndex] = generateRowIdBlock(positionCount);
+                return new Page(positionCount, blocks);
+            }
+
+            checkState(rowIdIndex < channelCount, "rowIdIndex out of bounds");
+            for (int channel = 0; channel < channelCount; channel++) {
+                if (channel < rowIdIndex) {
+                    blocks[channel] = page.getBlock(channel);
+                }
+                else if (channel == rowIdIndex) {
+                    blocks[channel] = generateRowIdBlock(positionCount);
+                    blocks[channel + 1] = page.getBlock(channel);
+                }
+                else {
+                    blocks[channel + 1] = page.getBlock(channel);
+                }
+            }
+            return new Page(positionCount, blocks);
+        }
+
+        private static Block generateRowIdBlock(int positionCount)
+        {
+            BlockBuilder blockBuilder = VARCHAR.createBlockBuilder(null, positionCount);
+            for (int i = 0; i < positionCount; i++) {
+                VARCHAR.writeSlice(blockBuilder, Slices.utf8Slice(UUID.randomUUID().toString()));
+            }
+            return blockBuilder.build();
         }
 
         @Override

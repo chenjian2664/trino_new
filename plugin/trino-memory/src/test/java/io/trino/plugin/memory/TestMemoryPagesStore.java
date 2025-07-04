@@ -180,17 +180,17 @@ public class TestMemoryPagesStore
 
     private static ConnectorOutputTableHandle createMemoryOutputTableHandle(long tableId, Long... activeTableIds)
     {
-        return new MemoryOutputTableHandle(tableId, ImmutableSet.copyOf(activeTableIds));
+        return new MemoryOutputTableHandle(tableId, ImmutableSet.copyOf(activeTableIds), 1);
     }
 
     private static ConnectorInsertTableHandle createMemoryInsertTableHandle(long tableId, Long[] activeTableIds)
     {
-        return new MemoryInsertTableHandle(tableId, InsertMode.APPEND, ImmutableSet.copyOf(activeTableIds));
+        return new MemoryInsertTableHandle(tableId, InsertMode.APPEND, ImmutableSet.copyOf(activeTableIds), 1);
     }
 
     private static ConnectorInsertTableHandle createOverwriteMemoryInsertTableHandle(long tableId, Long[] activeTableIds)
     {
-        return new MemoryInsertTableHandle(tableId, InsertMode.OVERWRITE, ImmutableSet.copyOf(activeTableIds));
+        return new MemoryInsertTableHandle(tableId, InsertMode.OVERWRITE, ImmutableSet.copyOf(activeTableIds), 1);
     }
 
     private static Page createPage()

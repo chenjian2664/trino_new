@@ -31,6 +31,7 @@ import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.connector.ColumnPosition;
 import io.trino.spi.connector.ConnectorInsertTableHandle;
+import io.trino.spi.connector.ConnectorMergeTableHandle;
 import io.trino.spi.connector.ConnectorMetadata;
 import io.trino.spi.connector.ConnectorOutputMetadata;
 import io.trino.spi.connector.ConnectorOutputTableHandle;
@@ -44,6 +45,7 @@ import io.trino.spi.connector.LimitApplicationResult;
 import io.trino.spi.connector.RelationColumnsMetadata;
 import io.trino.spi.connector.RelationCommentMetadata;
 import io.trino.spi.connector.RetryMode;
+import io.trino.spi.connector.RowChangeParadigm;
 import io.trino.spi.connector.SampleApplicationResult;
 import io.trino.spi.connector.SampleType;
 import io.trino.spi.connector.SaveMode;
@@ -79,13 +81,17 @@ import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static com.google.common.collect.MoreCollectors.onlyElement;
 import static io.trino.spi.StandardErrorCode.ALREADY_EXISTS;
+import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.trino.spi.StandardErrorCode.NOT_FOUND;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.StandardErrorCode.SCHEMA_NOT_EMPTY;
 import static io.trino.spi.connector.RetryMode.NO_RETRIES;
+import static io.trino.spi.connector.RowChangeParadigm.CHANGE_ONLY_UPDATED_COLUMNS;
 import static io.trino.spi.connector.SampleType.SYSTEM;
 import static io.trino.spi.connector.SaveMode.REPLACE;
+import static io.trino.spi.type.VarcharType.VARCHAR;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.function.Function.identity;
@@ -95,6 +101,8 @@ public class MemoryMetadata
         implements ConnectorMetadata
 {
     public static final String SCHEMA_NAME = "default";
+    public static final String ROW_ID = "$row_id";
+//    public static final MemoryColumnHandle ROW_ID = new MemoryColumnHandle(-1, "$row_id", VARCHAR);
 
     private final NodeManager nodeManager;
     @GuardedBy("this")
@@ -244,6 +252,7 @@ public class MemoryMetadata
     {
         MemoryTableHandle handle = (MemoryTableHandle) tableHandle;
         return tables.get(handle.id()).columns().stream()
+                .filter(columnInfo -> !columnInfo.handle().name().equals(ROW_ID))
                 .collect(toImmutableMap(column -> column.handle().name(), ColumnInfo::handle));
     }
 
@@ -345,11 +354,14 @@ public class MemoryMetadata
         checkState(!nodes.isEmpty(), "No Memory nodes available");
 
         ImmutableList.Builder<ColumnInfo> columns = ImmutableList.builder();
-        for (int i = 0; i < tableMetadata.getColumns().size(); i++) {
+        int columnSize = tableMetadata.getColumns().size();
+        for (int i = 0; i < columnSize; i++) {
             ColumnMetadata column = tableMetadata.getColumns().get(i);
             MemoryColumnHandle handle = new MemoryColumnHandle(i, column.getName(), column.getType());
             columns.add(new ColumnInfo(handle, column.isNullable(), Optional.ofNullable(column.getComment())));
         }
+
+        columns.add(new ColumnInfo(new MemoryColumnHandle(columnSize, ROW_ID, VARCHAR), false, Optional.empty()));
 
         tableIds.put(tableMetadata.getTable(), tableId);
         tables.put(tableId, new TableInfo(
@@ -361,7 +373,7 @@ public class MemoryMetadata
                 new HashMap<>(),
                 tableMetadata.getComment()));
 
-        return new MemoryOutputTableHandle(tableId, ImmutableSet.copyOf(tableIds.values()));
+        return new MemoryOutputTableHandle(tableId, ImmutableSet.copyOf(tableIds.values()), columnSize);
     }
 
     @GuardedBy("this")
@@ -400,7 +412,8 @@ public class MemoryMetadata
         TableInfo tableInfo = tables.get(memoryTableHandle.id());
         InsertMode mode = tableInfo.truncated() ? InsertMode.OVERWRITE : InsertMode.APPEND;
         tables.put(tableInfo.id(), new TableInfo(tableInfo.id(), tableInfo.schemaName(), tableInfo.tableName(), tableInfo.columns(), false, tableInfo.dataFragments(), tableInfo.comment()));
-        return new MemoryInsertTableHandle(memoryTableHandle.id(), mode, ImmutableSet.copyOf(tableIds.values()));
+        MemoryColumnHandle rowIdColumn = (MemoryColumnHandle) getMergeRowIdColumnHandle(session, tableHandle);
+        return new MemoryInsertTableHandle(memoryTableHandle.id(), mode, ImmutableSet.copyOf(tableIds.values()), rowIdColumn.columnIndex());
     }
 
     @Override
@@ -650,6 +663,40 @@ public class MemoryMetadata
     public boolean allowSplittingReadIntoMultipleSubQueries(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         return true;
+    }
+
+    @Override
+    public ColumnHandle getMergeRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        MemoryTableHandle table = (MemoryTableHandle) tableHandle;
+        TableInfo tableInfo = tables.get(table.id());
+        return tableInfo.columns().stream()
+                .filter(columnInfo -> columnInfo.handle().name().equals(ROW_ID))
+                .collect(onlyElement())
+                .handle();
+    }
+
+    @Override
+    public RowChangeParadigm getRowChangeParadigm(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        return CHANGE_ONLY_UPDATED_COLUMNS;
+    }
+
+    @Override
+    public ConnectorMergeTableHandle beginMerge(ConnectorSession session, ConnectorTableHandle tableHandle, Map<Integer, Collection<ColumnHandle>> updateCaseColumns, RetryMode retryMode)
+    {
+        throw new TrinoException(NOT_SUPPORTED, MODIFYING_ROWS_MESSAGE);
+    }
+
+    @Override
+    public void finishMerge(
+            ConnectorSession session,
+            ConnectorMergeTableHandle mergeTableHandle,
+            List<ConnectorTableHandle> sourceTableHandles,
+            Collection<Slice> fragments,
+            Collection<ComputedStatistics> computedStatistics)
+    {
+        throw new TrinoException(GENERIC_INTERNAL_ERROR, "ConnectorMetadata beginMerge() is implemented without finishMerge()");
     }
 
     @Override
