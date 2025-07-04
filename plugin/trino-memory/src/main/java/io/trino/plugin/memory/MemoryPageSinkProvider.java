@@ -25,6 +25,8 @@ import io.trino.spi.Page;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.connector.ConnectorInsertTableHandle;
+import io.trino.spi.connector.ConnectorMergeSink;
+import io.trino.spi.connector.ConnectorMergeTableHandle;
 import io.trino.spi.connector.ConnectorOutputTableHandle;
 import io.trino.spi.connector.ConnectorPageSink;
 import io.trino.spi.connector.ConnectorPageSinkId;
@@ -37,8 +39,13 @@ import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.function.Function;
+import java.util.stream.IntStream;
 
 import static com.google.common.base.Preconditions.checkState;
+import static io.trino.spi.type.TinyintType.TINYINT;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.CompletableFuture.completedFuture;
@@ -70,7 +77,7 @@ public class MemoryPageSinkProvider
         checkState(memoryOutputTableHandle.activeTableIds().contains(tableId));
 
         pagesStore.cleanUp(memoryOutputTableHandle.activeTableIds());
-        pagesStore.initialize(tableId);
+        pagesStore.initialize(tableId, memoryOutputTableHandle.rowIdIndex());
         return new MemoryPageSink(pagesStore, currentHostAddress, tableId, memoryOutputTableHandle.rowIdIndex());
     }
 
@@ -86,8 +93,15 @@ public class MemoryPageSinkProvider
         }
 
         pagesStore.cleanUp(memoryInsertTableHandle.activeTableIds());
-        pagesStore.initialize(tableId);
+        pagesStore.initialize(tableId, memoryInsertTableHandle.rowIdIndex());
         return new MemoryPageSink(pagesStore, currentHostAddress, tableId, memoryInsertTableHandle.rowIdIndex());
+    }
+
+    @Override
+    public ConnectorMergeSink createMergeSink(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorMergeTableHandle mergeHandle, ConnectorPageSinkId pageSinkId)
+    {
+        MemoryTableHandle memoryTableHandle = (MemoryTableHandle) mergeHandle;
+        return new MemoryMergeSink(pagesStore, currentHostAddress, memoryTableHandle.id(), memoryTableHandle.rowIdIndex());
     }
 
     private static class MemoryPageSink
@@ -116,31 +130,7 @@ public class MemoryPageSinkProvider
 
         private Page addRowId(Page page)
         {
-            int channelCount = page.getChannelCount();
-            int positionCount = page.getPositionCount();
-            Block[] blocks = new Block[channelCount + 1];
-            if (rowIdIndex == channelCount) {
-                for (int channel = 0; channel < channelCount; channel++) {
-                    blocks[channel] = page.getBlock(channel);
-                }
-                blocks[rowIdIndex] = generateRowIdBlock(positionCount);
-                return new Page(positionCount, blocks);
-            }
-
-            checkState(rowIdIndex < channelCount, "rowIdIndex out of bounds");
-            for (int channel = 0; channel < channelCount; channel++) {
-                if (channel < rowIdIndex) {
-                    blocks[channel] = page.getBlock(channel);
-                }
-                else if (channel == rowIdIndex) {
-                    blocks[channel] = generateRowIdBlock(positionCount);
-                    blocks[channel + 1] = page.getBlock(channel);
-                }
-                else {
-                    blocks[channel + 1] = page.getBlock(channel);
-                }
-            }
-            return new Page(positionCount, blocks);
+            return addBlockAt(page, rowIdIndex, generateRowIdBlock(page.getPositionCount()));
         }
 
         private static Block generateRowIdBlock(int positionCount)
@@ -167,5 +157,114 @@ public class MemoryPageSinkProvider
 
         @Override
         public void abort() {}
+    }
+
+    private static Page addBlockAt(Page page, int index, Block block)
+    {
+        checkState(page.getPositionCount() == block.getPositionCount(), "Error block: %s for page: %s", block.getPositionCount(), page.getPositionCount());
+        int channelCount = page.getChannelCount();
+        int positionCount = page.getPositionCount();
+        if (index == channelCount) {
+            return page.appendColumn(block);
+        }
+
+        Block[] blocks = new Block[channelCount + 1];
+        checkState(index < channelCount, "rowIdIndex out of bounds");
+        for (int channel = 0; channel < channelCount; channel++) {
+            if (channel < index) {
+                blocks[channel] = page.getBlock(channel);
+            }
+            else if (channel == index) {
+                blocks[channel] = block;
+                blocks[channel + 1] = page.getBlock(channel);
+            }
+            else {
+                blocks[channel + 1] = page.getBlock(channel);
+            }
+        }
+        return new Page(positionCount, blocks);
+    }
+
+    private static class MemoryMergeSink
+            implements ConnectorMergeSink
+    {
+        private final ConnectorPageSink insertSink;
+        private final MemoryPagesStore pagesStore;
+        private final HostAddress currentHostAddress;
+        private final long tableId;
+        private final int rowIdIndex;
+
+        private long deleted;
+
+        private MemoryMergeSink(MemoryPagesStore pagesStore, HostAddress currentHostAddress, long tableId, int rowIdIndex)
+        {
+            this.insertSink = new MemoryPageSink(pagesStore, currentHostAddress, tableId, rowIdIndex);
+            this.pagesStore = requireNonNull(pagesStore, "pagesStore is null");
+            this.currentHostAddress = requireNonNull(currentHostAddress, "currentHostAddress is null");
+            this.tableId = tableId;
+            this.rowIdIndex = rowIdIndex;
+        }
+
+        @Override
+        public void storeMergedRows(Page page)
+        {
+            int channelCount = page.getChannelCount();
+            Block operationBlock = page.getBlock(channelCount - 3);
+
+            int[] dataChannel = IntStream.range(0, channelCount - 3).toArray();
+            Page dataPage = page.getColumns(dataChannel);
+
+            int positionCount = page.getPositionCount();
+            int[] insertPositions = new int[positionCount];
+            int insertPositionCount = 0;
+            int[] deletePositions = new int[positionCount];
+            int deletePositionCount = 0;
+            int[] updatePositions = new int[positionCount];
+            int updatePositionCount = 0;
+
+            for (int position = 0; position < positionCount; position++) {
+                int operation = TINYINT.getByte(operationBlock, position);
+                switch (operation) {
+                    case INSERT_OPERATION_NUMBER -> {
+                        insertPositions[insertPositionCount] = position;
+                        insertPositionCount++;
+                    }
+                    case DELETE_OPERATION_NUMBER -> {
+                        deletePositions[deletePositionCount] = position;
+                        deletePositionCount++;
+                    }
+                    case UPDATE_OPERATION_NUMBER -> {
+                        updatePositions[updatePositionCount] = position;
+                        updatePositionCount++;
+                    }
+                    default -> throw new IllegalStateException("Unexpected value: " + operation);
+                }
+            }
+
+            Block rowIdBlock = page.getBlock(channelCount - 1);
+            // insert should follow the original columns order
+            if (insertPositionCount > 0) {
+                insertSink.appendPage(dataPage.getPositions(insertPositions, 0, insertPositionCount));
+            }
+
+            // delete first than update since we want to reduce the memory usage first
+            if (deletePositionCount > 0) {
+                deleted += pagesStore.delete(tableId, rowIdBlock.getPositions(deletePositions, 0, deletePositionCount));
+            }
+
+            if (updatePositionCount > 0) {
+                pagesStore.update(tableId, addBlockAt(dataPage.getPositions(updatePositions, 0, updatePositionCount), rowIdIndex, rowIdBlock.getPositions(updatePositions, 0, updatePositionCount)));
+            }
+        }
+
+        @Override
+        public CompletableFuture<Collection<Slice>> finish()
+        {
+            ImmutableList.Builder<Slice> slicesBuilder = ImmutableList.builder();
+            slicesBuilder.add(new MemoryDataFragment(currentHostAddress, -deleted).toSlice());
+            insertSink.finish().thenAccept(slicesBuilder::addAll);
+            deleted = 0;
+            return completedFuture(slicesBuilder.build());
+        }
     }
 }

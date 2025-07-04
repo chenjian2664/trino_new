@@ -14,11 +14,14 @@
 package io.trino.plugin.memory;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.errorprone.annotations.ThreadSafe;
 import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.Inject;
+import io.airlift.slice.Slice;
 import io.trino.spi.Page;
 import io.trino.spi.TrinoException;
+import io.trino.spi.block.Block;
 import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.type.Type;
 
@@ -56,10 +59,10 @@ public class MemoryPagesStore
         this.maxBytes = config.getMaxDataPerNode().toBytes();
     }
 
-    public synchronized void initialize(long tableId)
+    public synchronized void initialize(long tableId, int rowIdIndex)
     {
         if (!tables.containsKey(tableId)) {
-            tables.put(tableId, new TableData());
+            tables.put(tableId, new TableData(rowIdIndex));
         }
     }
 
@@ -79,6 +82,34 @@ public class MemoryPagesStore
 
         TableData tableData = tables.get(tableId);
         tableData.add(page);
+    }
+
+    public synchronized void update(Long tableId, Page page)
+    {
+        if (!contains(tableId)) {
+            throw new TrinoException(MISSING_DATA, "Failed to find table on a worker.");
+        }
+
+        page.compact();
+
+        TableData tableData = tables.get(tableId);
+        currentBytes -= tableData.update(page);
+
+        if (currentBytes > maxBytes) {
+            throw new TrinoException(MEMORY_LIMIT_EXCEEDED, format("Memory limit [%d] for memory connector exceeded", maxBytes));
+        }
+    }
+
+    public synchronized long delete(Long tableId, Block rowIds)
+    {
+        if (!contains(tableId)) {
+            throw new TrinoException(MISSING_DATA, "Failed to find table on a worker.");
+        }
+
+        TableData tableData = tables.get(tableId);
+        long current = tableData.getRows();
+        currentBytes -= tableData.delete(rowIds);
+        return current - tableData.getRows();
     }
 
     public synchronized List<Page> getPages(
@@ -180,13 +211,80 @@ public class MemoryPagesStore
 
     private static final class TableData
     {
+        private final int rowIdIndex;
         private final List<Page> pages = new ArrayList<>();
         private long rows;
+
+        TableData(int rowIdIndex)
+        {
+            this.rowIdIndex = rowIdIndex;
+        }
 
         public void add(Page page)
         {
             pages.add(page);
             rows += page.getPositionCount();
+        }
+
+        // return how many bytes deleted
+        public long update(Page page)
+        {
+            long bytesAdded = page.getRetainedSizeInBytes();
+            long bytesDelete = delete(page.getBlock(rowIdIndex));
+
+            add(page);
+            return bytesDelete - bytesAdded;
+        }
+
+        // return how many bytes deleted
+        public long delete(Block block)
+        {
+            Set<String> rowIds = buildRowIds(block);
+            int remaining = block.getPositionCount();
+            rows -= remaining;
+
+            long bytesDeleted = 0;
+            for (int i = 0; i < pages.size(); i++) {
+                Page page = pages.get(i);
+
+                long beforeBytes = page.getRetainedSizeInBytes();
+                Block rowIdBlock = page.getBlock(rowIdIndex);
+
+                int positionCount = 0;
+                int[] positions = new int[page.getPositionCount()];
+                for (int position = 0; position < page.getPositionCount(); position++) {
+                    Slice rowId = VARCHAR.getSlice(rowIdBlock, position);
+                    if (!rowIds.contains(rowId.toStringUtf8())) {
+                        positions[positionCount] = position;
+                        positionCount++;
+                    }
+                    else {
+                        remaining--;
+                    }
+                }
+
+                if (positionCount == page.getPositionCount()) {
+                    continue;
+                }
+
+                page = page.getPositions(positions, 0, positionCount);
+                bytesDeleted += beforeBytes - page.getRetainedSizeInBytes();
+
+                // TODO: we actually could remove the page if it doesn't contain data anymore
+                pages.set(i, page);
+            }
+
+            checkArgument(remaining == 0, "There are %s remaining rows not be deleted", remaining);
+            return bytesDeleted;
+        }
+
+        private static Set<String> buildRowIds(Block block)
+        {
+            ImmutableSet.Builder<String> rowIdsBuilder = ImmutableSet.builder();
+            for (int position = 0; position < block.getPositionCount(); position++) {
+                rowIdsBuilder.add(VARCHAR.getSlice(block, position).toStringUtf8());
+            }
+            return rowIdsBuilder.build();
         }
 
         private List<Page> getPages()

@@ -92,16 +92,15 @@ public class TestMemoryConnectorTest
                  SUPPORTS_ADD_FIELD,
                  SUPPORTS_AGGREGATION_PUSHDOWN,
                  SUPPORTS_CREATE_MATERIALIZED_VIEW,
-                 SUPPORTS_DELETE,
+//                 SUPPORTS_DELETE,
                  SUPPORTS_DEREFERENCE_PUSHDOWN,
                  SUPPORTS_DROP_COLUMN,
                  SUPPORTS_LIMIT_PUSHDOWN,
-                 SUPPORTS_MERGE,
+//                 SUPPORTS_MERGE,
                  SUPPORTS_PREDICATE_PUSHDOWN,
                  SUPPORTS_RENAME_FIELD,
                  SUPPORTS_SET_COLUMN_TYPE,
-                 SUPPORTS_TOPN_PUSHDOWN,
-                 SUPPORTS_UPDATE -> false;
+                 SUPPORTS_TOPN_PUSHDOWN -> false;
             case SUPPORTS_CREATE_FUNCTION -> true;
             default -> super.hasBehavior(connectorBehavior);
         };

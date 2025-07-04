@@ -220,7 +220,7 @@ public class MemoryMetadata
             return null;
         }
 
-        return new MemoryTableHandle(id, schemaTableName, OptionalLong.empty(), OptionalDouble.empty());
+        return new MemoryTableHandle(id, getMergeRowIdColumnHandle(id).columnIndex(), schemaTableName, OptionalLong.empty(), OptionalDouble.empty());
     }
 
     @Override
@@ -666,10 +666,15 @@ public class MemoryMetadata
     }
 
     @Override
-    public ColumnHandle getMergeRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
+    public synchronized ColumnHandle getMergeRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         MemoryTableHandle table = (MemoryTableHandle) tableHandle;
-        TableInfo tableInfo = tables.get(table.id());
+        return getMergeRowIdColumnHandle(table.id());
+    }
+
+    private MemoryColumnHandle getMergeRowIdColumnHandle(long tableId)
+    {
+        TableInfo tableInfo = tables.get(tableId);
         return tableInfo.columns().stream()
                 .filter(columnInfo -> columnInfo.handle().name().equals(ROW_ID))
                 .collect(onlyElement())
@@ -677,26 +682,27 @@ public class MemoryMetadata
     }
 
     @Override
-    public RowChangeParadigm getRowChangeParadigm(ConnectorSession session, ConnectorTableHandle tableHandle)
+    public synchronized RowChangeParadigm getRowChangeParadigm(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         return CHANGE_ONLY_UPDATED_COLUMNS;
     }
 
     @Override
-    public ConnectorMergeTableHandle beginMerge(ConnectorSession session, ConnectorTableHandle tableHandle, Map<Integer, Collection<ColumnHandle>> updateCaseColumns, RetryMode retryMode)
+    public synchronized ConnectorMergeTableHandle beginMerge(ConnectorSession session, ConnectorTableHandle tableHandle, Map<Integer, Collection<ColumnHandle>> updateCaseColumns, RetryMode retryMode)
     {
-        throw new TrinoException(NOT_SUPPORTED, MODIFYING_ROWS_MESSAGE);
+        return (MemoryTableHandle) tableHandle;
     }
 
     @Override
-    public void finishMerge(
+    public synchronized void finishMerge(
             ConnectorSession session,
             ConnectorMergeTableHandle mergeTableHandle,
             List<ConnectorTableHandle> sourceTableHandles,
             Collection<Slice> fragments,
             Collection<ComputedStatistics> computedStatistics)
     {
-        throw new TrinoException(GENERIC_INTERNAL_ERROR, "ConnectorMetadata beginMerge() is implemented without finishMerge()");
+        MemoryTableHandle tableHandle = (MemoryTableHandle) mergeTableHandle;
+        updateRowsOnHosts(tableHandle.id(), fragments);
     }
 
     @Override
