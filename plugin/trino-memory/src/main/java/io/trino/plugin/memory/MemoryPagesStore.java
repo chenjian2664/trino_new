@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.OptionalDouble;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.IntStream;
 
@@ -151,11 +152,11 @@ public class MemoryPagesStore
             // Append missing columns with null values. This situation happens when a new column is added without additional insert.
             // The new added columns is behind the row_id column, so add the row_id block first
             int channelCount = page.getChannelCount();
-            if (channelCount <= columnIndexes.length) {
-                BlockBuilder builder = VARCHAR.createBlockBuilder(null, page.getPositionCount());
-                IntStream.range(0, page.getPositionCount()).forEach(_ -> builder.appendNull());
-                page = page.appendColumn(builder.build());
-            }
+//            if (channelCount <= columnIndexes.length) {
+//                BlockBuilder builder = VARCHAR.createBlockBuilder(null, page.getPositionCount());
+//                IntStream.range(0, page.getPositionCount()).forEach(_ -> builder.appendNull());
+//                page = page.appendColumn(builder.build());
+//            }
             for (int j = channelCount; j < columnIndexes.length; j++) {
                 Type type = columnTypes.get(j);
                 BlockBuilder builder = type.createBlockBuilder(null, page.getPositionCount());
@@ -163,6 +164,10 @@ public class MemoryPagesStore
                 page = page.appendColumn(builder.build());
             }
             partitionedPages.add(page.getColumns(columnIndexes));
+        }
+
+        if (partNumber == 0 && tableId == 6) {
+            System.out.println("Get page size: " + tableData.getPages().size() + ", total rows: " + totalRows + ", name : " + tableData.name);
         }
 
         return partitionedPages.build();
@@ -215,6 +220,8 @@ public class MemoryPagesStore
         private final List<Page> pages = new ArrayList<>();
         private long rows;
 
+        private final String name = UUID.randomUUID().toString();
+
         TableData(int rowIdIndex)
         {
             this.rowIdIndex = rowIdIndex;
@@ -241,6 +248,7 @@ public class MemoryPagesStore
         {
             Set<String> rowIds = buildRowIds(block);
             int remaining = block.getPositionCount();
+            System.out.println("rowIds: " + rowIds + ", pages: " + pages.size());
             rows -= remaining;
 
             long bytesDeleted = 0;
@@ -259,6 +267,7 @@ public class MemoryPagesStore
                         positionCount++;
                     }
                     else {
+                        System.out.println("rowId to remove: " + rowId);
                         remaining--;
                     }
                 }

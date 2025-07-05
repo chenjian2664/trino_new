@@ -39,9 +39,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ExecutionException;
-import java.util.function.Function;
 import java.util.stream.IntStream;
 
 import static com.google.common.base.Preconditions.checkState;
@@ -101,6 +98,7 @@ public class MemoryPageSinkProvider
     public ConnectorMergeSink createMergeSink(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorMergeTableHandle mergeHandle, ConnectorPageSinkId pageSinkId)
     {
         MemoryTableHandle memoryTableHandle = (MemoryTableHandle) mergeHandle;
+        pagesStore.initialize(memoryTableHandle.id(), memoryTableHandle.rowIdIndex());
         return new MemoryMergeSink(pagesStore, currentHostAddress, memoryTableHandle.id(), memoryTableHandle.rowIdIndex());
     }
 
@@ -194,7 +192,9 @@ public class MemoryPageSinkProvider
         private final long tableId;
         private final int rowIdIndex;
 
-        private long deleted;
+        private final List<Block> deleteRowIds = new ArrayList<>();
+        private final List<Page> appendPages = new ArrayList<>();
+        private final List<Page> updatePages = new ArrayList<>();
 
         private MemoryMergeSink(MemoryPagesStore pagesStore, HostAddress currentHostAddress, long tableId, int rowIdIndex)
         {
@@ -244,27 +244,35 @@ public class MemoryPageSinkProvider
             Block rowIdBlock = page.getBlock(channelCount - 1);
             // insert should follow the original columns order
             if (insertPositionCount > 0) {
-                insertSink.appendPage(dataPage.getPositions(insertPositions, 0, insertPositionCount));
+                appendPages.add(dataPage.getPositions(insertPositions, 0, insertPositionCount));
             }
 
             // delete first than update since we want to reduce the memory usage first
             if (deletePositionCount > 0) {
-                deleted += pagesStore.delete(tableId, rowIdBlock.getPositions(deletePositions, 0, deletePositionCount));
+                deleteRowIds.add(rowIdBlock.getPositions(deletePositions, 0, deletePositionCount));
             }
 
             if (updatePositionCount > 0) {
-                pagesStore.update(tableId, addBlockAt(dataPage.getPositions(updatePositions, 0, updatePositionCount), rowIdIndex, rowIdBlock.getPositions(updatePositions, 0, updatePositionCount)));
+                updatePages.add(addBlockAt(dataPage.getPositions(updatePositions, 0, updatePositionCount), rowIdIndex, rowIdBlock.getPositions(updatePositions, 0, updatePositionCount)));
             }
         }
 
         @Override
         public CompletableFuture<Collection<Slice>> finish()
         {
-            ImmutableList.Builder<Slice> slicesBuilder = ImmutableList.builder();
-            slicesBuilder.add(new MemoryDataFragment(currentHostAddress, -deleted).toSlice());
-            insertSink.finish().thenAccept(slicesBuilder::addAll);
-            deleted = 0;
-            return completedFuture(slicesBuilder.build());
+            long addedRows = 0;
+            for (Page page : appendPages) {
+                insertSink.appendPage(page);
+                addedRows += page.getPositionCount();
+            }
+            for (Block block : deleteRowIds) {
+                pagesStore.delete(tableId, block);
+                addedRows -= block.getPositionCount();
+            }
+            for (Page page : updatePages) {
+                pagesStore.update(tableId, page);
+            }
+            return completedFuture(ImmutableList.of(new MemoryDataFragment(currentHostAddress, addedRows).toSlice()));
         }
     }
 }

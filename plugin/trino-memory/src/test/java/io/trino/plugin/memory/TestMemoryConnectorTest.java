@@ -113,6 +113,18 @@ public class TestMemoryConnectorTest
     }
 
     @Test
+    void testDeleteSimple()
+    {
+        try (TestTable testTable = newTrinoTable("test_delete_simple", "(id int, v int)")) {
+            assertUpdate("INSERT INTO " + testTable.getName() + " VALUES (1, 1), (2, 2), (3, 3)", 3);
+            assertThat(query("SELECT * FROM " + testTable.getName())).matches("VALUES (1, 1), (2, 2), (3, 3)");
+            System.out.println("++++++++++++++++++++++++++");
+            assertUpdate("DELETE FROM " + testTable.getName() + " WHERE id = 1", 1);
+            assertThat(query("SELECT * FROM " + testTable.getName())).matches("VALUES (2, 2), (3, 3)");
+        }
+    }
+
+    @Test
     public void testCreateTableWhenTableIsAlreadyCreated()
     {
         @Language("SQL") String createTableSql = "CREATE TABLE nation AS SELECT * FROM tpch.tiny.nation";
