@@ -1377,8 +1377,7 @@ public class DeltaLakeMetadata
                 transactionLogWriter.flush();
 
                 if (replaceExistingTable) {
-                    verify(commitVersion > tableHandle.getReadVersion());
-                    writeCheckpointMandatory(session, schemaTableName, location, tableHandle.toCredentialsHandle(), commitVersion);
+                    writeCheckpoint(session, schemaTableName, location, tableHandle.toCredentialsHandle(), commitVersion);
                 }
             }
         }
@@ -1751,7 +1750,7 @@ public class DeltaLakeMetadata
             writeCommitted = true;
 
             if (handle.replace() && handle.readVersion().isPresent()) {
-                writeCheckpointMandatory(session, schemaTableName, location, handle.toCredentialsHandle(), commitVersion);
+                writeCheckpoint(session, schemaTableName, location, handle.toCredentialsHandle(), commitVersion);
             }
 
             if (isCollectExtendedStatisticsColumnStatisticsOnWrite(session) && !computedStatistics.isEmpty()) {
@@ -3190,7 +3189,7 @@ public class DeltaLakeMetadata
             // This does not pose correctness issue but may be confusing if someone looks into transaction log.
             // To fix that we should allow for getting snapshot for given version.
 
-            writeCheckpointMandatory(session, table, tableLocation, credentialsHandle, newVersion);
+            writeCheckpoint(session, table, tableLocation, credentialsHandle, newVersion);
         }
         catch (Exception e) {
             // We can't fail here as transaction was already committed, in case of INSERT this could result
@@ -3199,7 +3198,7 @@ public class DeltaLakeMetadata
         }
     }
 
-    private void writeCheckpointMandatory(ConnectorSession session, SchemaTableName table, String tableLocation, VendedCredentialsHandle credentialsHandle, long newVersion)
+    private void writeCheckpoint(ConnectorSession session, SchemaTableName table, String tableLocation, VendedCredentialsHandle credentialsHandle, long newVersion)
             throws IOException
     {
         TransactionLogReader transactionLogReader = new FileSystemTransactionLogReader(tableLocation, credentialsHandle, fileSystemFactory);
