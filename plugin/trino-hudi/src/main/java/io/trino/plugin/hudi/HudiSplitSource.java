@@ -29,6 +29,7 @@ import io.trino.plugin.hudi.split.HudiBackgroundSplitLoader;
 import io.trino.plugin.hudi.split.HudiSplitWeightProvider;
 import io.trino.plugin.hudi.split.SizeBasedSplitWeightProvider;
 import io.trino.spi.TrinoException;
+import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorSplit;
 import io.trino.spi.connector.ConnectorSplitSource;
@@ -109,7 +110,7 @@ public class HudiSplitSource
     }
 
     @Override
-    public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize)
+    public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize, ConnectorDynamicFilter dynamicFilter)
     {
         boolean noMoreSplits = isFinished();
         Throwable throwable = trinoException.get();

@@ -14,9 +14,68 @@
 package io.trino.spi.connector;
 
 import io.trino.spi.function.table.ConnectorTableFunctionHandle;
+import io.trino.spi.predicate.TupleDomain;
+
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
 public interface ConnectorSplitManager
 {
+    /**
+     * Returns splits for a table scan.
+     * <p>
+     * {@code dynamicFilterColumns} is the static set of columns the dynamic filter will cover.
+     * Connectors may use this to make planning-time decisions (e.g. which column statistics to
+     * read). The per-batch resolved predicate arrives separately via
+     * {@link ConnectorSplitSource#getNextBatch(int, ConnectorDynamicFilter)}.
+     *
+     * @since 481
+     */
+    default ConnectorSplitSource getSplits(
+            ConnectorTransactionHandle transaction,
+            ConnectorSession session,
+            ConnectorTableHandle table,
+            Set<ColumnHandle> dynamicFilterColumns,
+            Constraint constraint)
+    {
+        return getSplits(transaction, session, table, new DynamicFilter()
+        {
+            @Override
+            public Set<ColumnHandle> getColumnsCovered()
+            {
+                return dynamicFilterColumns;
+            }
+
+            @Override
+            public CompletableFuture<?> isBlocked()
+            {
+                return NOT_BLOCKED;
+            }
+
+            @Override
+            public boolean isComplete()
+            {
+                return true;
+            }
+
+            @Override
+            public boolean isAwaitable()
+            {
+                return false;
+            }
+
+            @Override
+            public TupleDomain<ColumnHandle> getCurrentPredicate()
+            {
+                return TupleDomain.all();
+            }
+        }, constraint);
+    }
+
+    /**
+     * @deprecated Use {@link #getSplits(ConnectorTransactionHandle, ConnectorSession, ConnectorTableHandle, Set, Constraint)} instead.
+     */
+    @Deprecated(forRemoval = true, since = "481")
     default ConnectorSplitSource getSplits(
             ConnectorTransactionHandle transaction,
             ConnectorSession session,
