@@ -26,6 +26,7 @@ import io.trino.plugin.hive.util.AsyncQueue.BorrowResult;
 import io.trino.plugin.hive.util.SizeBasedSplitWeightProvider;
 import io.trino.plugin.hive.util.ThrottledAsyncQueue;
 import io.trino.spi.TrinoException;
+import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorSplit;
 import io.trino.spi.connector.ConnectorSplitSource;
@@ -50,6 +51,7 @@ import static io.airlift.units.DataSize.succinctBytes;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_EXCEEDED_SPLIT_BUFFERING_LIMIT;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_FILE_NOT_FOUND;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_UNKNOWN_ERROR;
+import static io.trino.plugin.hive.HiveSessionProperties.getDynamicFilteringWaitTimeout;
 import static io.trino.plugin.hive.HiveSessionProperties.getMaxInitialSplitSize;
 import static io.trino.plugin.hive.HiveSessionProperties.getMaxSplitSize;
 import static io.trino.plugin.hive.HiveSessionProperties.getMinimumAssignedSplitWeight;
@@ -90,6 +92,8 @@ class HiveSplitSource
 
     private final boolean recordScannedFiles;
     private final ImmutableList.Builder<Object> scannedFilePaths = ImmutableList.builder();
+    private final CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture;
+    private final long dynamicFilterWaitTimeoutMillis;
 
     private HiveSplitSource(
             ConnectorSession session,
@@ -102,7 +106,8 @@ class HiveSplitSource
             AtomicReference<State> stateReference,
             CounterStat highMemorySplitSourceCounter,
             SplitAffinityProvider splitAffinityProvider,
-            boolean recordScannedFiles)
+            boolean recordScannedFiles,
+            CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture)
     {
         requireNonNull(session, "session is null");
         this.queryId = session.getQueryId();
@@ -121,6 +126,8 @@ class HiveSplitSource
         this.splitWeightProvider = isSizeBasedSplitWeightsEnabled(session) ? new SizeBasedSplitWeightProvider(getMinimumAssignedSplitWeight(session), maxSplitSize) : HiveSplitWeightProvider.uniformStandardWeightProvider();
         this.splitAffinityProvider = requireNonNull(splitAffinityProvider, "splitAffinityProvider is null");
         this.recordScannedFiles = recordScannedFiles;
+        this.dynamicFilterFuture = requireNonNull(dynamicFilterFuture, "dynamicFilterFuture is null");
+        this.dynamicFilterWaitTimeoutMillis = getDynamicFilteringWaitTimeout(session).toMillis();
     }
 
     public static HiveSplitSource allAtOnce(
@@ -135,7 +142,8 @@ class HiveSplitSource
             Executor executor,
             CounterStat highMemorySplitSourceCounter,
             SplitAffinityProvider splitAffinityProvider,
-            boolean recordScannedFiles)
+            boolean recordScannedFiles,
+            CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture)
     {
         AtomicReference<State> stateReference = new AtomicReference<>(State.initial());
         return new HiveSplitSource(
@@ -176,7 +184,8 @@ class HiveSplitSource
                 stateReference,
                 highMemorySplitSourceCounter,
                 splitAffinityProvider,
-                recordScannedFiles);
+                recordScannedFiles,
+                dynamicFilterFuture);
     }
 
     /**
@@ -253,8 +262,15 @@ class HiveSplitSource
     }
 
     @Override
-    public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize)
+    public long getRequestedDynamicFilterWaitTimeoutMillis()
     {
+        return dynamicFilterWaitTimeoutMillis;
+    }
+
+    @Override
+    public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize, ConnectorDynamicFilter dynamicFilter)
+    {
+        dynamicFilterFuture.complete(dynamicFilter);
         boolean noMoreSplits;
         State state = stateReference.get();
         switch (state.getKind()) {

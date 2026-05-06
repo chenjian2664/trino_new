@@ -17,6 +17,7 @@ import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ListMultimap;
 import com.google.common.io.Resources;
 import io.airlift.stats.CounterStat;
@@ -45,10 +46,10 @@ import io.trino.plugin.hive.util.InternalHiveSplitFactory;
 import io.trino.plugin.hive.util.ValidWriteIdList;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ColumnHandle;
+import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorSplitSource.ConnectorSplitBatch;
 import io.trino.spi.connector.Constraint;
-import io.trino.spi.connector.DynamicFilter;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
@@ -323,38 +324,8 @@ public class TestBackgroundHiveSplitLoader
         CompletableFuture<?> isBlocked = new CompletableFuture<>();
         try {
             BackgroundHiveSplitLoader backgroundHiveSplitLoader = backgroundHiveSplitLoader(
-                    new DynamicFilter()
-                    {
-                        @Override
-                        public Set<ColumnHandle> getColumnsCovered()
-                        {
-                            return Set.of();
-                        }
-
-                        @Override
-                        public CompletableFuture<?> isBlocked()
-                        {
-                            return isBlocked;
-                        }
-
-                        @Override
-                        public boolean isComplete()
-                        {
-                            return false;
-                        }
-
-                        @Override
-                        public boolean isAwaitable()
-                        {
-                            return true;
-                        }
-
-                        @Override
-                        public TupleDomain<ColumnHandle> getCurrentPredicate()
-                        {
-                            return TupleDomain.all();
-                        }
-                    },
+                    ImmutableSet.of(),
+                    CompletableFuture.completedFuture(new ConnectorDynamicFilter(TupleDomain.all(), true)),
                     new Duration(1, SECONDS));
             HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
             backgroundHiveSplitLoader.start(hiveSplitSource);
@@ -493,7 +464,6 @@ public class TestBackgroundHiveSplitLoader
                 },
                 TupleDomain.all(),
                 Constraint.alwaysTrue(),
-                DynamicFilter.EMPTY,
                 new Duration(0, SECONDS),
                 TESTING_TYPE_MANAGER,
                 createBucketSplitInfo(Optional.empty(), Optional.empty()),
@@ -506,7 +476,9 @@ public class TestBackgroundHiveSplitLoader
                 false,
                 Optional.empty(),
                 Optional.empty(),
-                100);
+                100,
+                ImmutableSet.of(),
+                CompletableFuture.completedFuture(new ConnectorDynamicFilter(TupleDomain.all(), true)));
 
         HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
         backgroundHiveSplitLoader.start(hiveSplitSource);
@@ -1089,10 +1061,11 @@ public class TestBackgroundHiveSplitLoader
             throws Exception
     {
         ImmutableList.Builder<HiveSplit> splits = ImmutableList.builder();
+        ConnectorDynamicFilter dynamicFilter = new ConnectorDynamicFilter(TupleDomain.all(), true);
         while (!source.isFinished()) {
             ConnectorSplitBatch batch;
             try {
-                batch = source.getNextBatch(100).get();
+                batch = source.getNextBatch(100, dynamicFilter).get();
             }
             catch (ExecutionException e) {
                 throwIfUnchecked(e.getCause());
@@ -1106,7 +1079,8 @@ public class TestBackgroundHiveSplitLoader
     }
 
     private BackgroundHiveSplitLoader backgroundHiveSplitLoader(
-            DynamicFilter dynamicFilter,
+            Set<ColumnHandle> dynamicFilterColumns,
+            CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture,
             Duration dynamicFilteringProbeBlockingTimeoutMillis)
             throws IOException
     {
@@ -1115,12 +1089,13 @@ public class TestBackgroundHiveSplitLoader
                 fileSystemFactory,
                 TupleDomain.all(),
                 Constraint.alwaysTrue(),
-                dynamicFilter,
                 dynamicFilteringProbeBlockingTimeoutMillis,
                 Optional.empty(),
                 SIMPLE_TABLE,
                 Optional.empty(),
-                Optional.empty());
+                Optional.empty(),
+                dynamicFilterColumns,
+                dynamicFilterFuture);
     }
 
     private static TrinoFileSystemFactory createTestingFileSystem(Collection<Location> locations)
@@ -1165,12 +1140,13 @@ public class TestBackgroundHiveSplitLoader
                 fileSystemFactory,
                 compactEffectivePredicate,
                 constraint,
-                DynamicFilter.EMPTY,
                 new Duration(0, SECONDS),
                 hiveBucketFilter,
                 table,
                 tablePartitioning,
-                Optional.empty());
+                Optional.empty(),
+                ImmutableSet.of(),
+                CompletableFuture.completedFuture(new ConnectorDynamicFilter(TupleDomain.all(), true)));
     }
 
     private BackgroundHiveSplitLoader backgroundHiveSplitLoader(
@@ -1185,24 +1161,26 @@ public class TestBackgroundHiveSplitLoader
                 fileSystemFactory,
                 compactEffectivePredicate,
                 Constraint.alwaysTrue(),
-                DynamicFilter.EMPTY,
                 new Duration(0, SECONDS),
                 hiveBucketFilter,
                 table,
                 tablePartitioning,
-                validWriteIds);
+                validWriteIds,
+                ImmutableSet.of(),
+                CompletableFuture.completedFuture(new ConnectorDynamicFilter(TupleDomain.all(), true)));
     }
 
     private BackgroundHiveSplitLoader backgroundHiveSplitLoader(
             TrinoFileSystemFactory fileSystemFactory,
             TupleDomain<HiveColumnHandle> compactEffectivePredicate,
             Constraint constraint,
-            DynamicFilter dynamicFilter,
             Duration dynamicFilteringProbeBlockingTimeout,
             Optional<HiveBucketFilter> hiveBucketFilter,
             Table table,
             Optional<HiveTablePartitioning> tablePartitioning,
-            Optional<ValidWriteIdList> validWriteIds)
+            Optional<ValidWriteIdList> validWriteIds,
+            Set<ColumnHandle> dynamicFilterColumns,
+            CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture)
     {
         List<HivePartitionMetadata> hivePartitionMetadatas =
                 List.of(
@@ -1216,7 +1194,6 @@ public class TestBackgroundHiveSplitLoader
                 hivePartitionMetadatas.iterator(),
                 compactEffectivePredicate,
                 constraint,
-                dynamicFilter,
                 dynamicFilteringProbeBlockingTimeout,
                 TESTING_TYPE_MANAGER,
                 createBucketSplitInfo(tablePartitioning, hiveBucketFilter),
@@ -1229,7 +1206,9 @@ public class TestBackgroundHiveSplitLoader
                 false,
                 validWriteIds,
                 Optional.empty(),
-                100);
+                100,
+                dynamicFilterColumns,
+                dynamicFilterFuture);
     }
 
     private BackgroundHiveSplitLoader backgroundHiveSplitLoader(
@@ -1261,7 +1240,6 @@ public class TestBackgroundHiveSplitLoader
                 partitions.iterator(),
                 TupleDomain.none(),
                 Constraint.alwaysTrue(),
-                DynamicFilter.EMPTY,
                 new Duration(0, SECONDS),
                 TESTING_TYPE_MANAGER,
                 Optional.empty(),
@@ -1274,7 +1252,9 @@ public class TestBackgroundHiveSplitLoader
                 false,
                 Optional.empty(),
                 Optional.empty(),
-                maxPartitions);
+                maxPartitions,
+                ImmutableSet.of(),
+                CompletableFuture.completedFuture(new ConnectorDynamicFilter(TupleDomain.all(), true)));
     }
 
     private BackgroundHiveSplitLoader backgroundHiveSplitLoaderOfflinePartitions()
@@ -1289,7 +1269,6 @@ public class TestBackgroundHiveSplitLoader
                 createPartitionMetadataWithOfflinePartitions(),
                 TupleDomain.all(),
                 Constraint.alwaysTrue(),
-                DynamicFilter.EMPTY,
                 new Duration(0, SECONDS),
                 TESTING_TYPE_MANAGER,
                 createBucketSplitInfo(Optional.empty(), Optional.empty()),
@@ -1302,7 +1281,9 @@ public class TestBackgroundHiveSplitLoader
                 false,
                 Optional.empty(),
                 Optional.empty(),
-                100);
+                100,
+                ImmutableSet.of(),
+                CompletableFuture.completedFuture(new ConnectorDynamicFilter(TupleDomain.all(), true)));
     }
 
     private static Iterator<HivePartitionMetadata> createPartitionMetadataWithOfflinePartitions()
@@ -1341,7 +1322,8 @@ public class TestBackgroundHiveSplitLoader
                 executor,
                 new CounterStat(),
                 new NoopSplitAffinityProvider(),
-                false);
+                false,
+                CompletableFuture.completedFuture(new ConnectorDynamicFilter(TupleDomain.all(), true)));
     }
 
     private static Table table(

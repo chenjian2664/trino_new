@@ -39,13 +39,13 @@ import io.trino.plugin.hive.util.HiveUtil;
 import io.trino.spi.TrinoException;
 import io.trino.spi.VersionEmbedder;
 import io.trino.spi.connector.ColumnHandle;
+import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorSplitManager;
 import io.trino.spi.connector.ConnectorSplitSource;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.connector.Constraint;
-import io.trino.spi.connector.DynamicFilter;
 import io.trino.spi.connector.FixedSplitSource;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.TableNotFoundException;
@@ -61,6 +61,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -196,7 +197,7 @@ public class HiveSplitManager
             ConnectorTransactionHandle transaction,
             ConnectorSession session,
             ConnectorTableHandle tableHandle,
-            DynamicFilter dynamicFilter,
+            Set<ColumnHandle> dynamicFilterColumns,
             Constraint constraint)
     {
         HiveTableHandle hiveTable = (HiveTableHandle) tableHandle;
@@ -248,6 +249,8 @@ public class HiveSplitManager
                 .map(columnName -> columnName.toLowerCase(ENGLISH))
                 .collect(toImmutableSet());
 
+        CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture = new CompletableFuture<>();
+
         Iterator<HivePartitionMetadata> hivePartitions = getPartitionMetadata(
                 session,
                 metastore,
@@ -255,7 +258,7 @@ public class HiveSplitManager
                 peekingIterator(partitions),
                 tablePartitioning.map(HiveTablePartitioning::toTableBucketProperty),
                 neededColumnNames,
-                dynamicFilter,
+                dynamicFilterFuture,
                 hiveTable);
 
         HiveSplitLoader hiveSplitLoader = new BackgroundHiveSplitLoader(
@@ -263,7 +266,6 @@ public class HiveSplitManager
                 hivePartitions,
                 hiveTable.getCompactEffectivePredicate(),
                 constraint,
-                dynamicFilter,
                 getDynamicFilteringWaitTimeout(session),
                 typeManager,
                 createBucketSplitInfo(tablePartitioning, bucketFilter),
@@ -277,7 +279,9 @@ public class HiveSplitManager
                 metastore.getValidWriteIds(session, hiveTable)
                         .map(value -> value.getTableValidWriteIdList(table.getDatabaseName() + "." + table.getTableName())),
                 hiveTable.getMaxScannedFileSize(),
-                maxPartitionsPerScan);
+                maxPartitionsPerScan,
+                dynamicFilterColumns,
+                dynamicFilterFuture);
 
         HiveSplitSource splitSource = HiveSplitSource.allAtOnce(
                 session,
@@ -291,7 +295,8 @@ public class HiveSplitManager
                 executor,
                 highMemorySplitSourceCounter,
                 splitAffinityProvider,
-                hiveTable.isRecordScannedFiles());
+                hiveTable.isRecordScannedFiles(),
+                dynamicFilterFuture);
         hiveSplitLoader.start(splitSource);
 
         return splitSource;
@@ -311,7 +316,7 @@ public class HiveSplitManager
             PeekingIterator<HivePartition> hivePartitions,
             Optional<HiveBucketProperty> bucketProperty,
             Set<String> neededColumnNames,
-            DynamicFilter dynamicFilter,
+            CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture,
             HiveTableHandle tableHandle)
     {
         if (!hivePartitions.hasNext()) {
@@ -332,7 +337,7 @@ public class HiveSplitManager
         Iterator<List<HivePartition>> partitionNameBatches = partitionExponentially(hivePartitions, minPartitionBatchSize, maxPartitionBatchSize);
         Iterator<List<HivePartitionMetadata>> partitionBatches = transform(partitionNameBatches, partitionBatch -> {
             // Use dynamic filters to reduce the partitions listed by getPartitionsByNames
-            TupleDomain<ColumnHandle> currentDynamicFilter = dynamicFilter.getCurrentPredicate();
+            TupleDomain<ColumnHandle> currentDynamicFilter = dynamicFilterFuture.join().currentPredicate();
             if (!currentDynamicFilter.isAll()) {
                 TupleDomain<ColumnHandle> partitionsFilter = currentDynamicFilter.intersect(tableHandle.getCompactEffectivePredicate());
                 partitionBatch = partitionBatch.stream()

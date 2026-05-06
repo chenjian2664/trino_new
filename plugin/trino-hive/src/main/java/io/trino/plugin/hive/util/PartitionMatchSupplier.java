@@ -17,11 +17,12 @@ import com.google.common.collect.ImmutableList;
 import io.trino.metastore.HivePartition;
 import io.trino.plugin.hive.HiveColumnHandle;
 import io.trino.spi.connector.ColumnHandle;
-import io.trino.spi.connector.DynamicFilter;
+import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.predicate.TupleDomain;
 import jakarta.annotation.Nullable;
 
 import java.util.List;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 
 import static io.trino.plugin.hive.HivePartitionManager.partitionMatches;
@@ -30,14 +31,14 @@ import static java.util.Objects.requireNonNull;
 public final class PartitionMatchSupplier
         implements BooleanSupplier
 {
-    private final DynamicFilter dynamicFilter;
+    private final ConnectorDynamicFilter dynamicFilter;
     private final HivePartition hivePartition;
     private final List<HiveColumnHandle> partitionColumns;
 
     @Nullable
     private volatile Boolean finalResult; // value is null until the dynamic filter no longer needs to be evaluated
 
-    private PartitionMatchSupplier(DynamicFilter dynamicFilter, HivePartition hivePartition, List<HiveColumnHandle> partitionColumns)
+    private PartitionMatchSupplier(ConnectorDynamicFilter dynamicFilter, HivePartition hivePartition, List<HiveColumnHandle> partitionColumns)
     {
         this.dynamicFilter = requireNonNull(dynamicFilter, "dynamicFilter is null");
         this.hivePartition = requireNonNull(hivePartition, "hivePartition is null");
@@ -59,7 +60,7 @@ public final class PartitionMatchSupplier
     {
         // Must be checked before calling dynamicFilter.getCurrentPredicate()
         boolean filterIsComplete = dynamicFilter.isComplete();
-        TupleDomain<ColumnHandle> currentPredicate = dynamicFilter.getCurrentPredicate();
+        TupleDomain<ColumnHandle> currentPredicate = dynamicFilter.currentPredicate();
         boolean partitionMatches = partitionMatches(partitionColumns, currentPredicate, hivePartition);
         if (!partitionMatches || filterIsComplete) {
             // Store the result to avoid re-evaluating the filter for each subsequent split
@@ -68,18 +69,22 @@ public final class PartitionMatchSupplier
         return partitionMatches;
     }
 
-    public static BooleanSupplier createPartitionMatchSupplier(DynamicFilter dynamicFilter, HivePartition hivePartition, List<HiveColumnHandle> partitionColumns)
+    public static BooleanSupplier createPartitionMatchSupplier(
+            Set<ColumnHandle> dynamicFilterColumns,
+            ConnectorDynamicFilter dynamicFilter,
+            HivePartition hivePartition,
+            List<HiveColumnHandle> partitionColumns)
     {
         requireNonNull(dynamicFilter, "dynamicFilter is null");
         requireNonNull(hivePartition, "hivePartition is null");
         requireNonNull(partitionColumns, "partitionColumns is null");
 
-        if (partitionColumns.stream().noneMatch(dynamicFilter.getColumnsCovered()::contains)) {
+        if (partitionColumns.stream().noneMatch(dynamicFilterColumns::contains)) {
             return new BooleanValueSupplier(true);
         }
         if (dynamicFilter.isComplete()) {
             // Evaluate the dynamic filter once and use the resulting value
-            return new BooleanValueSupplier(partitionMatches(partitionColumns, dynamicFilter.getCurrentPredicate(), hivePartition));
+            return new BooleanValueSupplier(partitionMatches(partitionColumns, dynamicFilter.currentPredicate(), hivePartition));
         }
         return new PartitionMatchSupplier(dynamicFilter, hivePartition, partitionColumns);
     }
