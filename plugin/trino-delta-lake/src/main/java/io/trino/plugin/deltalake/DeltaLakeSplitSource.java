@@ -13,7 +13,6 @@
  */
 package io.trino.plugin.deltalake;
 
-import com.google.common.base.Stopwatch;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.io.Closer;
@@ -25,9 +24,9 @@ import io.trino.plugin.hive.util.AsyncQueue;
 import io.trino.plugin.hive.util.ThrottledAsyncQueue;
 import io.trino.spi.ErrorCodeSupplier;
 import io.trino.spi.TrinoException;
+import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.connector.ConnectorSplit;
 import io.trino.spi.connector.ConnectorSplitSource;
-import io.trino.spi.connector.DynamicFilter;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
@@ -51,21 +50,17 @@ import static io.airlift.concurrent.MoreFutures.toCompletableFuture;
 import static io.trino.plugin.deltalake.util.DeltaLakeDomains.partitionMatchesPredicate;
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static java.util.Objects.requireNonNull;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 public class DeltaLakeSplitSource
         implements ConnectorSplitSource
 {
-    private static final ConnectorSplitBatch EMPTY_BATCH = new ConnectorSplitBatch(ImmutableList.of(), false);
     private static final Logger LOG = Logger.get(DeltaLakeSplitSource.class);
 
     private final SchemaTableName tableName;
     private final AsyncQueue<ConnectorSplit> queue;
     private final boolean recordScannedFiles;
     private final ImmutableSet.Builder<DeltaLakeScannedDataFile> scannedFilePaths = ImmutableSet.builder();
-    private final DynamicFilter dynamicFilter;
     private final long dynamicFilteringWaitTimeoutMillis;
-    private final Stopwatch dynamicFilterWaitStopwatch;
     private final Closer closer = Closer.create();
 
     private volatile TrinoException trinoException;
@@ -76,7 +71,6 @@ public class DeltaLakeSplitSource
             ExecutorService executor,
             int maxSplitsPerSecond,
             int maxOutstandingSplits,
-            DynamicFilter dynamicFilter,
             Duration dynamicFilteringWaitTimeout,
             boolean recordScannedFiles)
     {
@@ -84,9 +78,7 @@ public class DeltaLakeSplitSource
         this.queue = new ThrottledAsyncQueue<>(maxSplitsPerSecond, maxOutstandingSplits, executor);
         closer.register(queue::finish);
         this.recordScannedFiles = recordScannedFiles;
-        this.dynamicFilter = requireNonNull(dynamicFilter, "dynamicFilter is null");
         this.dynamicFilteringWaitTimeoutMillis = dynamicFilteringWaitTimeout.toMillis();
-        this.dynamicFilterWaitStopwatch = Stopwatch.createStarted();
         closer.register(splits::close);
         queueSplits(splits, queue, executor)
                 .exceptionally(throwable -> {
@@ -116,15 +108,14 @@ public class DeltaLakeSplitSource
     }
 
     @Override
-    public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize)
+    public long getRequestedDynamicFilterWaitTimeoutMillis()
     {
-        long timeLeft = dynamicFilteringWaitTimeoutMillis - dynamicFilterWaitStopwatch.elapsed(MILLISECONDS);
-        if (dynamicFilter.isAwaitable() && timeLeft > 0) {
-            return dynamicFilter.isBlocked()
-                    .thenApply(_ -> EMPTY_BATCH)
-                    .completeOnTimeout(EMPTY_BATCH, timeLeft, MILLISECONDS);
-        }
+        return dynamicFilteringWaitTimeoutMillis;
+    }
 
+    @Override
+    public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize, ConnectorDynamicFilter dynamicFilter)
+    {
         boolean noMoreSplits = isFinished();
         if (trinoException != null) {
             return toCompletableFuture(immediateFailedFuture(trinoException));
@@ -133,7 +124,7 @@ public class DeltaLakeSplitSource
         return toCompletableFuture(Futures.transform(
                 queue.getBatchAsync(maxSize),
                 splits -> {
-                    TupleDomain<DeltaLakeColumnHandle> dynamicFilterPredicate = dynamicFilter.getCurrentPredicate().transformKeys(DeltaLakeColumnHandle.class::cast);
+                    TupleDomain<DeltaLakeColumnHandle> dynamicFilterPredicate = dynamicFilter.currentPredicate().transformKeys(DeltaLakeColumnHandle.class::cast);
                     if (dynamicFilterPredicate.isNone()) {
                         return new ConnectorSplitBatch(ImmutableList.of(), noMoreSplits);
                     }
