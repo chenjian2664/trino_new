@@ -13,14 +13,16 @@
  */
 package io.trino.plugin.jdbc;
 
+import io.trino.spi.connector.ConnectorDynamicFilter;
+import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorSplitSource;
-import io.trino.spi.connector.DynamicFilter;
 import io.trino.spi.predicate.TupleDomain;
 
 import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static io.trino.plugin.jdbc.JdbcDynamicFilteringSessionProperties.getDynamicFilteringWaitTimeout;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -37,25 +39,25 @@ public class DynamicFilteringJdbcSplitSource
         implements ConnectorSplitSource
 {
     private final ConnectorSplitSource delegateSplitSource;
-    private final DynamicFilter dynamicFilter;
     private final JdbcTableHandle tableHandle;
+    private final long dynamicFilterWaitTimeoutMillis;
 
-    DynamicFilteringJdbcSplitSource(ConnectorSplitSource delegateSplitSource, DynamicFilter dynamicFilter, JdbcTableHandle tableHandle)
+    DynamicFilteringJdbcSplitSource(ConnectorSession session, ConnectorSplitSource delegateSplitSource, JdbcTableHandle tableHandle)
     {
         this.delegateSplitSource = requireNonNull(delegateSplitSource, "delegateSplitSource is null");
-        this.dynamicFilter = requireNonNull(dynamicFilter, "dynamicFilter is null");
         this.tableHandle = requireNonNull(tableHandle, "tableHandle is null");
+        this.dynamicFilterWaitTimeoutMillis = getDynamicFilteringWaitTimeout(session).toMillis();
     }
 
     @Override
-    public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize)
+    public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize, ConnectorDynamicFilter dynamicFilter)
     {
         if (!isEligibleForDynamicFilter(tableHandle)) {
-            return delegateSplitSource.getNextBatch(maxSize);
+            return delegateSplitSource.getNextBatch(maxSize, dynamicFilter);
         }
-        return delegateSplitSource.getNextBatch(maxSize)
+        return delegateSplitSource.getNextBatch(maxSize, dynamicFilter)
                 .thenApply(batch -> {
-                    TupleDomain<JdbcColumnHandle> dynamicFilterPredicate = dynamicFilter.getCurrentPredicate()
+                    TupleDomain<JdbcColumnHandle> dynamicFilterPredicate = dynamicFilter.currentPredicate()
                             .transformKeys(JdbcColumnHandle.class::cast);
                     return new ConnectorSplitBatch(
                             batch.getSplits().stream()
@@ -70,6 +72,12 @@ public class DynamicFilteringJdbcSplitSource
                                     .collect(toImmutableList()),
                             batch.isNoMoreSplits());
                 });
+    }
+
+    @Override
+    public long getRequestedDynamicFilterWaitTimeoutMillis()
+    {
+        return dynamicFilterWaitTimeoutMillis;
     }
 
     @Override

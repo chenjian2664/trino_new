@@ -16,7 +16,7 @@ package io.trino.plugin.jdbc;
 import io.airlift.stats.CounterStat;
 import io.airlift.stats.TimeStat;
 import io.airlift.units.Duration;
-import io.trino.spi.connector.DynamicFilter;
+import io.trino.spi.connector.ConnectorDynamicFilter;
 import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
 
@@ -57,14 +57,11 @@ public class DynamicFilteringStats
         return dynamicFilterWaitingTime;
     }
 
-    public void processDynamicFilter(DynamicFilter dynamicFilter, Duration waitingTime)
+    public void processDynamicFilter(ConnectorDynamicFilter dynamicFilter, Duration waitingTime)
     {
         totalDynamicFilters.update(1);
         if (dynamicFilter.isComplete()) {
             completedDynamicFilters.update(1);
-        }
-        if (dynamicFilter.isAwaitable()) {
-            awaitableDynamicFilters.update(1);
         }
         dynamicFilterWaitingTime.add(waitingTime);
     }

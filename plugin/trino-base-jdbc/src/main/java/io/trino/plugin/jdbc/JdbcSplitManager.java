@@ -14,13 +14,15 @@
 package io.trino.plugin.jdbc;
 
 import com.google.inject.Inject;
+import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorSplitManager;
 import io.trino.spi.connector.ConnectorSplitSource;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.connector.Constraint;
-import io.trino.spi.connector.DynamicFilter;
+
+import java.util.Set;
 
 import static io.trino.plugin.jdbc.JdbcDynamicFilteringSessionProperties.dynamicFilteringEnabled;
 import static java.util.Objects.requireNonNull;
@@ -41,7 +43,7 @@ public class JdbcSplitManager
             ConnectorTransactionHandle transaction,
             ConnectorSession session,
             ConnectorTableHandle table,
-            DynamicFilter dynamicFilter,
+            Set<ColumnHandle> dynamicFilterColumns,
             Constraint constraint)
     {
         if (table instanceof JdbcProcedureHandle procedureHandle) {
@@ -51,7 +53,7 @@ public class JdbcSplitManager
         JdbcTableHandle tableHandle = (JdbcTableHandle) table;
         ConnectorSplitSource jdbcSplitSource = jdbcClient.getSplits(session, tableHandle);
         if (dynamicFilteringEnabled(session)) {
-            return new DynamicFilteringJdbcSplitSource(jdbcSplitSource, dynamicFilter, tableHandle);
+            return new DynamicFilteringJdbcSplitSource(session, jdbcSplitSource, tableHandle);
         }
         return jdbcSplitSource;
     }
