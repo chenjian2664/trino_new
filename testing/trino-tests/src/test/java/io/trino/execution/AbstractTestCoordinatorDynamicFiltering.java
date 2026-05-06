@@ -24,6 +24,7 @@ import io.trino.spi.Plugin;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.Connector;
 import io.trino.spi.connector.ConnectorContext;
+import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.connector.ConnectorFactory;
 import io.trino.spi.connector.ConnectorMetadata;
 import io.trino.spi.connector.ConnectorPageSinkProvider;
@@ -61,6 +62,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.LongStream;
 
@@ -104,7 +106,7 @@ public abstract class AbstractTestCoordinatorDynamicFiltering
     public void setup()
     {
         // create lineitem table in test connector
-        getQueryRunner().installPlugin(new TestingPlugin(getRetryPolicy() == RetryPolicy.TASK));
+        getQueryRunner().installPlugin(new TestingPlugin());
         getQueryRunner().installPlugin(new TpchPlugin());
         getQueryRunner().installPlugin(new TpcdsPlugin());
         getQueryRunner().installPlugin(new MemoryPlugin());
@@ -472,12 +474,7 @@ public abstract class AbstractTestCoordinatorDynamicFiltering
     private class TestingPlugin
             implements Plugin
     {
-        private final boolean isTaskRetryMode;
-
-        public TestingPlugin(boolean isTaskRetryMode)
-        {
-            this.isTaskRetryMode = isTaskRetryMode;
-        }
+        public TestingPlugin() {}
 
         @Override
         public Iterable<ConnectorFactory> getConnectorFactories()
@@ -495,7 +492,7 @@ public abstract class AbstractTestCoordinatorDynamicFiltering
                 @Override
                 public Connector create(String catalogName, Map<String, String> config, ConnectorContext context)
                 {
-                    return new TestConnector(metadata, isTaskRetryMode);
+                    return new TestConnector(metadata);
                 }
             });
         }
@@ -505,12 +502,10 @@ public abstract class AbstractTestCoordinatorDynamicFiltering
             implements Connector
     {
         private final ConnectorMetadata metadata;
-        private final boolean isTaskRetryMode;
 
-        private TestConnector(ConnectorMetadata metadata, boolean isTaskRetryMode)
+        private TestConnector(ConnectorMetadata metadata)
         {
             this.metadata = requireNonNull(metadata, "metadata is null");
-            this.isTaskRetryMode = isTaskRetryMode;
         }
 
         @Override
@@ -535,37 +530,35 @@ public abstract class AbstractTestCoordinatorDynamicFiltering
                         ConnectorTransactionHandle transaction,
                         ConnectorSession session,
                         ConnectorTableHandle table,
-                        DynamicFilter dynamicFilter,
+                        Set<ColumnHandle> dynamicFilterColumns,
                         Constraint constraint)
                 {
-                    if (!isTaskRetryMode) {
-                        // In task retry mode, dynamic filter collection is done outside the join stage,
-                        // so it's not necessary that dynamicFilter will be blocked initially.
-                        assertThat(dynamicFilter.isBlocked().isDone())
-                                .describedAs("Dynamic filter should be initially blocked")
-                                .isFalse();
-                    }
-                    assertThat(dynamicFilter.getColumnsCovered())
+                    assertThat(dynamicFilterColumns)
                             .describedAs("columns covered")
                             .isEqualTo(expectedDynamicFilterColumnsCovered);
 
                     AtomicBoolean splitProduced = new AtomicBoolean();
+                    AtomicReference<TupleDomain<ColumnHandle>> capturedPredicate = new AtomicReference<>();
                     return new ConnectorSplitSource()
                     {
                         @Override
-                        public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize)
+                        public long getRequestedDynamicFilterWaitTimeoutMillis()
                         {
-                            CompletableFuture<?> blocked = dynamicFilter.isBlocked();
+                            return Long.MAX_VALUE;
+                        }
 
-                            if (blocked.isDone()) {
-                                splitProduced.set(true);
-                                return completedFuture(new ConnectorSplitBatch(ImmutableList.of(createRemoteSplit()), isFinished()));
+                        @Override
+                        public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize, ConnectorDynamicFilter dynamicFilter)
+                        {
+                            if (!dynamicFilter.isComplete()) {
+                                // Filter not yet complete — return empty batch so the engine retries
+                                // with a fresh predicate snapshot. In standard mode the engine already
+                                // waited; in FTE mode the engine retries until isComplete is true.
+                                return completedFuture(new ConnectorSplitBatch(ImmutableList.of(), false));
                             }
-
-                            return blocked.thenApply(_ -> {
-                                // yield until dynamic filter is fully loaded
-                                return new ConnectorSplitBatch(ImmutableList.of(), false);
-                            });
+                            capturedPredicate.set(dynamicFilter.currentPredicate());
+                            splitProduced.set(true);
+                            return completedFuture(new ConnectorSplitBatch(ImmutableList.of(createRemoteSplit()), true));
                         }
 
                         @Override
@@ -574,17 +567,15 @@ public abstract class AbstractTestCoordinatorDynamicFiltering
                         @Override
                         public boolean isFinished()
                         {
-                            assertThat(dynamicFilter.getColumnsCovered())
+                            assertThat(dynamicFilterColumns)
                                     .describedAs("columns covered")
                                     .isEqualTo(expectedDynamicFilterColumnsCovered);
 
-                            if (!dynamicFilter.isComplete() || !splitProduced.get()) {
+                            if (!splitProduced.get()) {
                                 return false;
                             }
 
-                            assertThat(dynamicFilter.isBlocked().isDone()).isTrue();
-                            expectedCoordinatorDynamicFilterAssertion.accept(dynamicFilter.getCurrentPredicate());
-
+                            expectedCoordinatorDynamicFilterAssertion.accept(capturedPredicate.get());
                             return true;
                         }
                     };

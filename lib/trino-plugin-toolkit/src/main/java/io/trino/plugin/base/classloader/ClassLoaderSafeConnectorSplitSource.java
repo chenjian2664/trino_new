@@ -15,6 +15,7 @@ package io.trino.plugin.base.classloader;
 
 import com.google.inject.Inject;
 import io.trino.spi.classloader.ThreadContextClassLoader;
+import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.connector.ConnectorSplitSource;
 import io.trino.spi.metrics.Metrics;
 
@@ -35,6 +36,14 @@ public class ClassLoaderSafeConnectorSplitSource
     {
         this.delegate = requireNonNull(delegate, "delegate is null");
         this.classLoader = requireNonNull(classLoader, "classLoader is null");
+    }
+
+    @Override
+    public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize, ConnectorDynamicFilter dynamicFilter)
+    {
+        try (ThreadContextClassLoader _ = new ThreadContextClassLoader(classLoader)) {
+            return delegate.getNextBatch(maxSize, dynamicFilter);
+        }
     }
 
     @Override
@@ -66,6 +75,14 @@ public class ClassLoaderSafeConnectorSplitSource
     {
         try (ThreadContextClassLoader _ = new ThreadContextClassLoader(classLoader)) {
             return delegate.isFinished();
+        }
+    }
+
+    @Override
+    public long getRequestedDynamicFilterWaitTimeoutMillis()
+    {
+        try (ThreadContextClassLoader _ = new ThreadContextClassLoader(classLoader)) {
+            return delegate.getRequestedDynamicFilterWaitTimeoutMillis();
         }
     }
 

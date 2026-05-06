@@ -373,7 +373,7 @@ public class TestSourcePartitionedScheduler
             StageScheduler scheduler = newSourcePartitionedSchedulerAsStageScheduler(
                     stage,
                     TABLE_SCAN_NODE_ID,
-                    new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, createFixedSplitSource(20, TestingSplit::createRemoteSplit)),
+                    new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, createFixedSplitSource(20, TestingSplit::createRemoteSplit), DynamicFilter.EMPTY),
                     new DynamicSplitPlacementPolicy(nodeScheduler.createNodeSelector(session), stage::getAllTasks),
                     2,
                     new DynamicFilterService(metadata, functionManager, typeOperators, new DynamicFilterConfig()),
@@ -511,7 +511,7 @@ public class TestSourcePartitionedScheduler
         StageScheduler scheduler = newSourcePartitionedSchedulerAsStageScheduler(
                 stage,
                 TABLE_SCAN_NODE_ID,
-                new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, createFixedSplitSource(4 * 300, TestingSplit::createRemoteSplit)),
+                new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, createFixedSplitSource(4 * 300, TestingSplit::createRemoteSplit), DynamicFilter.EMPTY),
                 new DynamicSplitPlacementPolicy(nodeScheduler.createNodeSelector(session), stage::getAllTasks),
                 4 * 300,
                 new DynamicFilterService(metadata, functionManager, typeOperators, new DynamicFilterConfig()),
@@ -554,7 +554,7 @@ public class TestSourcePartitionedScheduler
         StageScheduler scheduler = newSourcePartitionedSchedulerAsStageScheduler(
                 stage,
                 TABLE_SCAN_NODE_ID,
-                new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, createFixedSplitSource(3 * 300, TestingSplit::createRemoteSplit)),
+                new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, createFixedSplitSource(3 * 300, TestingSplit::createRemoteSplit), DynamicFilter.EMPTY),
                 new DynamicSplitPlacementPolicy(nodeScheduler.createNodeSelector(session), stage::getAllTasks),
                 3 * 300,
                 new DynamicFilterService(metadata, functionManager, typeOperators, new DynamicFilterConfig()),
@@ -596,7 +596,7 @@ public class TestSourcePartitionedScheduler
         StageScheduler scheduler = newSourcePartitionedSchedulerAsStageScheduler(
                 stage,
                 TABLE_SCAN_NODE_ID,
-                new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, createBlockedSplitSource()),
+                new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, createBlockedSplitSource(), DynamicFilter.EMPTY),
                 new DynamicSplitPlacementPolicy(nodeScheduler.createNodeSelector(session), stage::getAllTasks),
                 2,
                 dynamicFilterService,
@@ -666,7 +666,7 @@ public class TestSourcePartitionedScheduler
         return newSourcePartitionedSchedulerAsStageScheduler(
                 stage,
                 TABLE_SCAN_NODE_ID,
-                new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, splitSource),
+                new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, splitSource, DynamicFilter.EMPTY),
                 placementPolicy,
                 splitBatchSize,
                 new DynamicFilterService(metadata, functionManager, typeOperators, new DynamicFilterConfig()),

@@ -501,7 +501,7 @@ public class TestMultiSourcePartitionedScheduler
     {
         Map<PlanNodeId, SplitSource> sources = splitSources.entrySet()
                 .stream()
-                .collect(Collectors.toMap(Map.Entry::getKey, e -> new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, e.getValue())));
+                .collect(Collectors.toMap(Map.Entry::getKey, e -> new ConnectorAwareSplitSource(TEST_CATALOG_HANDLE, e.getValue(), DynamicFilter.EMPTY)));
         return new MultiSourcePartitionedScheduler(
                 stage,
                 sources,
