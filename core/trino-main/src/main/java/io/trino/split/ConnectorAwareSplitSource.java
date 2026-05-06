@@ -20,12 +20,14 @@ import com.google.common.util.concurrent.ListenableFuture;
 import io.trino.annotation.NotThreadSafe;
 import io.trino.connector.CatalogHandle;
 import io.trino.metadata.Split;
+import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.connector.ConnectorSplit;
 import io.trino.spi.connector.ConnectorSplitSource;
 import io.trino.spi.connector.ConnectorSplitSource.ConnectorSplitBatch;
 import io.trino.spi.connector.DynamicFilter;
 import io.trino.spi.metrics.Metrics;
+import io.trino.spi.predicate.TupleDomain;
 import jakarta.annotation.Nullable;
 
 import java.util.List;
@@ -90,8 +92,10 @@ public class ConnectorAwareSplitSource
                     .completeOnTimeout(new SplitBatch(ImmutableList.of(), false), timeLeft, MILLISECONDS);
             return toListenableFuture(emptyBatch);
         }
+        boolean isComplete = dynamicFilter.isComplete();
+        TupleDomain<ColumnHandle> currentPredicate = dynamicFilter.getCurrentPredicate();
         ListenableFuture<ConnectorSplitBatch> nextBatch = toListenableFuture(
-                source.getNextBatch(maxSize, new ConnectorDynamicFilter(dynamicFilter.getCurrentPredicate(), dynamicFilter.isComplete())));
+                source.getNextBatch(maxSize, new ConnectorDynamicFilter(currentPredicate, isComplete)));
         return Futures.transform(nextBatch, splitBatch -> {
             List<ConnectorSplit> connectorSplits = splitBatch.getSplits();
             ImmutableList.Builder<Split> result = ImmutableList.builderWithExpectedSize(connectorSplits.size());

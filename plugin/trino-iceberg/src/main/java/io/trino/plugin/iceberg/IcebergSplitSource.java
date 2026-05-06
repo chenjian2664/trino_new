@@ -181,11 +181,8 @@ public class IcebergSplitSource
     private long outputRowsLowerBound;
     private final SplitAffinityProvider splitAffinityProvider;
     private final InMemoryMetricsReporter metricsReporter;
+    private final Set<Integer> predicatedColumnIds;
     private volatile boolean finished;
-
-    @GuardedBy("this")
-    @Nullable
-    private Set<Integer> predicatedColumnIds;
 
     public IcebergSplitSource(
             IcebergFileSystemFactory fileSystemFactory,
@@ -200,7 +197,8 @@ public class IcebergSplitSource
             double minimumAssignedSplitWeight,
             SplitAffinityProvider splitAffinityProvider,
             InMemoryMetricsReporter metricsReporter,
-            ListeningExecutorService executor)
+            ListeningExecutorService executor,
+            Set<ColumnHandle> dynamicFilterColumns)
     {
         this.fileSystemFactory = requireNonNull(fileSystemFactory, "fileSystemFactory is null");
         this.session = requireNonNull(session, "session is null");
@@ -231,6 +229,11 @@ public class IcebergSplitSource
         this.splitAffinityProvider = requireNonNull(splitAffinityProvider, "splitAffinityProvider is null");
         this.metricsReporter = requireNonNull(metricsReporter, "metricsReporter is null");
         this.executor = requireNonNull(executor, "executor is null");
+        this.predicatedColumnIds = Stream.concat(
+                        tableHandle.getUnenforcedPredicate().getDomains().orElse(ImmutableMap.of()).keySet().stream(),
+                        dynamicFilterColumns.stream().map(IcebergColumnHandle.class::cast))
+                .map(IcebergColumnHandle::getId)
+                .collect(toImmutableSet());
     }
 
     @Override
@@ -268,12 +271,6 @@ public class IcebergSplitSource
                 finish();
                 return NO_MORE_SPLITS_BATCH;
             }
-
-            this.predicatedColumnIds = Stream.concat(
-                            tableHandle.getUnenforcedPredicate().getDomains().orElse(ImmutableMap.of()).keySet().stream(),
-                            dynamicFilterPredicate.getDomains().orElse(ImmutableMap.of()).keySet().stream())
-                    .map(IcebergColumnHandle::getId)
-                    .collect(toImmutableSet());
 
             Expression filterExpression = toIcebergExpression(effectivePredicate);
             Scan scan = (Scan) tableScan.filter(filterExpression);

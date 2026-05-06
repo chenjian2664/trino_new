@@ -117,7 +117,8 @@ public class IcebergSplitManager
                 getMinimumAssignedSplitWeight(session),
                 splitAffinityProvider,
                 metricsReporter,
-                splitSourceExecutor);
+                splitSourceExecutor,
+                dynamicFilterColumns);
 
         return new ClassLoaderSafeConnectorSplitSource(splitSource, IcebergSplitManager.class.getClassLoader());
     }

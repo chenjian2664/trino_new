@@ -68,6 +68,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.UUID;
 
 import static com.google.common.collect.Maps.transformValues;
@@ -133,18 +134,6 @@ public class TestIcebergSplitSource
     }
 
     @Test
-    public void testSplitGeneration()
-            throws Exception
-    {
-        SchemaTableName schemaTableName = new SchemaTableName("tpch", "nation");
-        Table nationTable = catalog.loadTable(SESSION, schemaTableName);
-        IcebergTableHandle tableHandle = createTableHandle(schemaTableName, nationTable, TupleDomain.all());
-
-        IcebergSplit split = generateSplit(nationTable, tableHandle, TupleDomain.all());
-        assertThat(split).isNotNull();
-    }
-
-    @Test
     public void testFileStatisticsDomain()
             throws Exception
     {
@@ -166,10 +155,8 @@ public class TestIcebergSplitSource
         IcebergColumnHandle regionKey = IcebergColumnHandle.optional(new ColumnIdentity(3, "regionkey", ColumnIdentity.TypeCategory.PRIMITIVE, ImmutableList.of()))
                 .columnType(BIGINT)
                 .build();
-        // Stats for regionKey are included when it appears in the dynamic filter predicate passed to getNextBatch
-        TupleDomain<ColumnHandle> dynamicFilterPredicate = TupleDomain.withColumnDomains(
-                ImmutableMap.of(regionKey, Domain.singleValue(BIGINT, 1L)));
-        split = generateSplit(nationTable, tableHandle, dynamicFilterPredicate);
+        // Stats for regionKey are included when it's in dynamicFilterColumns, even when the per-batch predicate has not yet resolved
+        split = generateSplit(nationTable, tableHandle, ImmutableSet.of(regionKey), new ConnectorDynamicFilter(TupleDomain.all(), false));
         assertThat(split.fileStatisticsDomain()).isEqualTo(TupleDomain.withColumnDomains(
                 ImmutableMap.of(
                         nationKey, Domain.create(ValueSet.ofRanges(Range.range(BIGINT, 0L, true, 24L, true)), false),
@@ -307,6 +294,12 @@ public class TestIcebergSplitSource
     private IcebergSplit generateSplit(Table nationTable, IcebergTableHandle tableHandle, TupleDomain<ColumnHandle> dynamicFilterPredicate)
             throws Exception
     {
+        return generateSplit(nationTable, tableHandle, ImmutableSet.of(), new ConnectorDynamicFilter(dynamicFilterPredicate, true));
+    }
+
+    private IcebergSplit generateSplit(Table nationTable, IcebergTableHandle tableHandle, Set<ColumnHandle> dynamicFilterColumns, ConnectorDynamicFilter dynamicFilter)
+            throws Exception
+    {
         try (IcebergSplitSource splitSource = new IcebergSplitSource(
                 new DefaultIcebergFileSystemFactory(fileSystemFactory),
                 SESSION,
@@ -320,10 +313,11 @@ public class TestIcebergSplitSource
                 0,
                 new NoopSplitAffinityProvider(),
                 new InMemoryMetricsReporter(),
-                newDirectExecutorService())) {
+                newDirectExecutorService(),
+                dynamicFilterColumns)) {
             ImmutableList.Builder<IcebergSplit> builder = ImmutableList.builder();
             while (!splitSource.isFinished()) {
-                splitSource.getNextBatch(100, new ConnectorDynamicFilter(dynamicFilterPredicate, true)).get()
+                splitSource.getNextBatch(100, dynamicFilter).get()
                         .getSplits()
                         .stream()
                         .map(IcebergSplit.class::cast)
