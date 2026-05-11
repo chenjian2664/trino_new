@@ -79,7 +79,8 @@ public interface ConnectorSplitSource
     /**
      * Returns the maximum time in milliseconds the engine should wait for dynamic filters to be
      * collected before the first call to {@link #getNextBatch(int, ConnectorDynamicFilter)}.
-     * Return {@code 0} to disable waiting (the default).
+     * The engine waits up to this timeout, or until the dynamic filter is fully resolved,
+     * whichever comes first. Return {@code 0} to disable waiting (the default).
      * <p>
      * The engine reads this value once when the split source is constructed; it is treated as
      * fixed for the lifetime of the source (per table scan).

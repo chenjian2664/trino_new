@@ -21,6 +21,4 @@ import io.trino.spi.predicate.TupleDomain;
  *
  * @since 481
  */
-public record ConnectorDynamicFilter(TupleDomain<ColumnHandle> currentPredicate, boolean isComplete)
-{
-}
+public record ConnectorDynamicFilter(TupleDomain<ColumnHandle> currentPredicate, boolean isComplete) {}
