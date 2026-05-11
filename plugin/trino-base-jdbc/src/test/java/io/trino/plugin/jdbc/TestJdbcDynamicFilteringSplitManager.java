@@ -38,7 +38,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestJdbcDynamicFilteringSplitManager
 {
-    private record TestColumnHandle() implements ColumnHandle {}
+    private record TestColumnHandle()
+            implements ColumnHandle {}
 
     private static final ConnectorTransactionHandle TRANSACTION_HANDLE = TestingTransactionHandle.create();
     private static final ConnectorSession SESSION = TestingConnectorSession.builder()
@@ -56,8 +57,7 @@ public class TestJdbcDynamicFilteringSplitManager
     public void testRequestedDynamicFilterWaitTimeoutReported()
     {
         JdbcDynamicFilteringSplitManager manager = new JdbcDynamicFilteringSplitManager(
-                new TestingSplitManager(ImmutableList.of()),
-                new DynamicFilteringStats());
+                new TestingSplitManager(ImmutableList.of()));
         Set<ColumnHandle> dynamicFilterColumns = ImmutableSet.of(new TestColumnHandle());
         ConnectorSplitSource splitSource = manager.getSplits(
                 TRANSACTION_HANDLE,
@@ -74,8 +74,7 @@ public class TestJdbcDynamicFilteringSplitManager
             throws Exception
     {
         JdbcDynamicFilteringSplitManager manager = new JdbcDynamicFilteringSplitManager(
-                new TestingSplitManager(ImmutableList.of()),
-                new DynamicFilteringStats());
+                new TestingSplitManager(ImmutableList.of()));
         Set<ColumnHandle> dynamicFilterColumns = ImmutableSet.of(new TestColumnHandle());
         ConnectorSplitSource splitSource = manager.getSplits(
                 TRANSACTION_HANDLE,

@@ -17,7 +17,6 @@ import com.google.common.collect.ImmutableSet;
 import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.Inject;
 import io.airlift.log.Logger;
-import io.airlift.units.Duration;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.connector.ConnectorSession;
@@ -48,15 +47,12 @@ public class JdbcDynamicFilteringSplitManager
     private static final Logger log = Logger.get(JdbcDynamicFilteringSplitManager.class);
 
     private final ConnectorSplitManager delegateSplitManager;
-    private final DynamicFilteringStats stats;
 
     @Inject
     public JdbcDynamicFilteringSplitManager(
-            @ForJdbcDynamicFiltering ConnectorSplitManager delegateSplitManager,
-            DynamicFilteringStats stats)
+            @ForJdbcDynamicFiltering ConnectorSplitManager delegateSplitManager)
     {
         this.delegateSplitManager = requireNonNull(delegateSplitManager, "delegateSplitManager is null");
-        this.stats = requireNonNull(stats, "stats is null");
     }
 
     @Override
@@ -121,14 +117,12 @@ public class JdbcDynamicFilteringSplitManager
         @Override
         public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize, ConnectorDynamicFilter dynamicFilter)
         {
-            Duration waitingTime = succinctNanos(System.nanoTime() - startNanos);
             log.debug(
-                    "Enumerating splits (query %s, table: %s, waiting time: %s, awaitable: %s, completed: %s)",
+                    "Enumerating splits (query %s, table: %s, waiting time: %s, completed: %s)",
                     session.getQueryId(),
                     table,
-                    waitingTime,
+                    succinctNanos(System.nanoTime() - startNanos),
                     dynamicFilter.isComplete());
-            stats.processDynamicFilter(dynamicFilter, waitingTime);
             return getDelegateSplitSource(dynamicFilter).getNextBatch(maxSize, dynamicFilter);
         }
 
