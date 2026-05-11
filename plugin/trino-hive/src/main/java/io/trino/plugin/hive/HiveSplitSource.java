@@ -92,7 +92,7 @@ class HiveSplitSource
 
     private final boolean recordScannedFiles;
     private final ImmutableList.Builder<Object> scannedFilePaths = ImmutableList.builder();
-    private final CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture;
+    private final DynamicFilterState dynamicFilterState;
     private final long dynamicFilterWaitTimeoutMillis;
 
     private HiveSplitSource(
@@ -107,7 +107,7 @@ class HiveSplitSource
             CounterStat highMemorySplitSourceCounter,
             SplitAffinityProvider splitAffinityProvider,
             boolean recordScannedFiles,
-            CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture)
+            DynamicFilterState dynamicFilterState)
     {
         requireNonNull(session, "session is null");
         this.queryId = session.getQueryId();
@@ -126,7 +126,7 @@ class HiveSplitSource
         this.splitWeightProvider = isSizeBasedSplitWeightsEnabled(session) ? new SizeBasedSplitWeightProvider(getMinimumAssignedSplitWeight(session), maxSplitSize) : HiveSplitWeightProvider.uniformStandardWeightProvider();
         this.splitAffinityProvider = requireNonNull(splitAffinityProvider, "splitAffinityProvider is null");
         this.recordScannedFiles = recordScannedFiles;
-        this.dynamicFilterFuture = requireNonNull(dynamicFilterFuture, "dynamicFilterFuture is null");
+        this.dynamicFilterState = requireNonNull(dynamicFilterState, "dynamicFilterState is null");
         this.dynamicFilterWaitTimeoutMillis = getDynamicFilteringWaitTimeout(session).toMillis();
     }
 
@@ -143,7 +143,7 @@ class HiveSplitSource
             CounterStat highMemorySplitSourceCounter,
             SplitAffinityProvider splitAffinityProvider,
             boolean recordScannedFiles,
-            CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture)
+            DynamicFilterState dynamicFilterState)
     {
         AtomicReference<State> stateReference = new AtomicReference<>(State.initial());
         return new HiveSplitSource(
@@ -185,7 +185,7 @@ class HiveSplitSource
                 highMemorySplitSourceCounter,
                 splitAffinityProvider,
                 recordScannedFiles,
-                dynamicFilterFuture);
+                dynamicFilterState);
     }
 
     /**
@@ -270,7 +270,7 @@ class HiveSplitSource
     @Override
     public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize, ConnectorDynamicFilter dynamicFilter)
     {
-        dynamicFilterFuture.complete(dynamicFilter);
+        dynamicFilterState.update(dynamicFilter);
         boolean noMoreSplits;
         State state = stateReference.get();
         switch (state.getKind()) {

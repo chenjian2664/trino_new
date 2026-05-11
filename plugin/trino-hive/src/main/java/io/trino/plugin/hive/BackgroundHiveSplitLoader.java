@@ -22,7 +22,6 @@ import com.google.common.collect.Multimaps;
 import com.google.common.collect.Streams;
 import com.google.common.io.CharStreams;
 import com.google.common.util.concurrent.ListenableFuture;
-import io.airlift.units.Duration;
 import io.trino.filesystem.FileEntry;
 import io.trino.filesystem.FileIterator;
 import io.trino.filesystem.Location;
@@ -50,7 +49,6 @@ import io.trino.plugin.hive.util.ResumableTasks;
 import io.trino.plugin.hive.util.ValidWriteIdList;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ColumnHandle;
-import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.Constraint;
 import io.trino.spi.predicate.TupleDomain;
@@ -70,7 +68,6 @@ import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -185,14 +182,13 @@ public class BackgroundHiveSplitLoader
     private final AtomicInteger activeLoaderCount = new AtomicInteger();
     private final AtomicInteger partitionCount = new AtomicInteger();
     private final Set<ColumnHandle> dynamicFilterColumns;
-    private final CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture;
+    private final DynamicFilterState dynamicFilterState;
 
     public BackgroundHiveSplitLoader(
             Table table,
             Iterator<HivePartitionMetadata> partitions,
             TupleDomain<? extends ColumnHandle> compactEffectivePredicate,
             Constraint constraint,
-            Duration dynamicFilteringWaitTimeout,
             TypeManager typeManager,
             Optional<BucketSplitInfo> tableBucketInfo,
             ConnectorSession session,
@@ -206,7 +202,7 @@ public class BackgroundHiveSplitLoader
             Optional<Long> maxSplitFileSize,
             int maxPartitions,
             Set<ColumnHandle> dynamicFilterColumns,
-            CompletableFuture<ConnectorDynamicFilter> dynamicFilterFuture)
+            DynamicFilterState dynamicFilterState)
     {
         this.table = table;
         this.compactEffectivePredicate = compactEffectivePredicate;
@@ -229,7 +225,7 @@ public class BackgroundHiveSplitLoader
         this.maxSplitFileSize = requireNonNull(maxSplitFileSize, "maxSplitFileSize is null");
         this.maxPartitions = maxPartitions;
         this.dynamicFilterColumns = ImmutableSet.copyOf(dynamicFilterColumns);
-        this.dynamicFilterFuture = requireNonNull(dynamicFilterFuture, "dynamicFilterFuture is null");
+        this.dynamicFilterState = requireNonNull(dynamicFilterState, "dynamicFilterState is null");
     }
 
     @Override
@@ -337,8 +333,8 @@ public class BackgroundHiveSplitLoader
     private ListenableFuture<Void> loadSplits()
             throws IOException
     {
-        if (!dynamicFilterFuture.isDone()) {
-            return toListenableFuture(dynamicFilterFuture.thenApply(_ -> null));
+        if (!dynamicFilterState.isReady()) {
+            return toListenableFuture(dynamicFilterState.await());
         }
         Iterator<InternalHiveSplit> splits = fileIterators.poll();
         if (splits == null) {
@@ -387,7 +383,7 @@ public class BackgroundHiveSplitLoader
         List<HivePartitionKey> partitionKeys = getPartitionKeys(table, partition.getPartition());
         TupleDomain<HiveColumnHandle> effectivePredicate = compactEffectivePredicate.transformKeys(HiveColumnHandle.class::cast);
 
-        BooleanSupplier partitionMatchSupplier = createPartitionMatchSupplier(dynamicFilterColumns, dynamicFilterFuture.join(), hivePartition, getPartitionKeyColumnHandles(table, typeManager));
+        BooleanSupplier partitionMatchSupplier = createPartitionMatchSupplier(dynamicFilterColumns, dynamicFilterState, hivePartition, getPartitionKeyColumnHandles(table, typeManager));
         if (!partitionMatchSupplier.getAsBoolean()) {
             // Avoid listing files and creating splits from a partition if it has been pruned due to dynamic filters
             return COMPLETED_FUTURE;
