@@ -157,6 +157,7 @@ import io.trino.spi.Plugin;
 import io.trino.spi.block.Block;
 import io.trino.spi.catalog.CatalogName;
 import io.trino.spi.connector.Connector;
+import io.trino.spi.connector.ConnectorExpressionEvaluator;
 import io.trino.spi.connector.ConnectorFactory;
 import io.trino.spi.connector.ConnectorName;
 import io.trino.spi.function.FunctionBundle;
@@ -183,9 +184,11 @@ import io.trino.sql.gen.JoinFilterFunctionCompiler;
 import io.trino.sql.gen.OrderingCompiler;
 import io.trino.sql.gen.PageFunctionCompiler;
 import io.trino.sql.gen.columnar.ColumnarFilterCompiler;
+import io.trino.sql.ir.Expression;
 import io.trino.sql.parser.SqlParser;
 import io.trino.sql.planner.AdaptivePlanner;
 import io.trino.sql.planner.CompilerConfig;
+import io.trino.sql.planner.InternalConnectorExpressionEvaluator;
 import io.trino.sql.planner.LocalExecutionPlanner;
 import io.trino.sql.planner.LocalExecutionPlanner.LocalExecutionPlan;
 import io.trino.sql.planner.LogicalPlanner;
@@ -222,6 +225,7 @@ import io.trino.type.InternalTypeManager;
 import io.trino.type.JsonPath2016Type;
 import io.trino.type.TypeDeserializer;
 import io.trino.type.TypeSignatureDeserializer;
+import io.trino.type.TypeSignatureKeyDeserializer;
 import io.trino.util.FinalizerService;
 import org.intellij.lang.annotations.Language;
 
@@ -339,6 +343,8 @@ public class PlanTester
     private final TaskManagerConfig taskManagerConfig;
     private final OptimizerConfig optimizerConfig;
     private final StatementAnalyzerFactory statementAnalyzerFactory;
+    private final JsonCodec<Expression> expressionCodec;
+    private final InternalConnectorExpressionEvaluator connectorExpressionEvaluator;
     private boolean printPlan;
 
     public static PlanTester create(Session defaultSession)
@@ -411,11 +417,15 @@ public class PlanTester
                         Type.class, new TypeDeserializer(typeManager),
                         TypeSignature.class, new TypeSignatureDeserializer(),
                         Block.class, new BlockJsonSerde.Deserializer(blockEncodingSerde)))
+                .withKeyDeserializers(ImmutableMap.of(
+                        TypeSignature.class, new TypeSignatureKeyDeserializer()))
                 .withJsonSerializers(ImmutableMap.of(
                         Block.class, new BlockJsonSerde.Serializer(blockEncodingSerde)))
                 .get();
-        JsonCodec<IrJsonPath> irJsonPathJsonCodec = new JsonCodecFactory(mapper).jsonCodec(IrJsonPath.class);
+        JsonCodecFactory codecFactory = new JsonCodecFactory(mapper);
+        JsonCodec<IrJsonPath> irJsonPathJsonCodec = codecFactory.jsonCodec(IrJsonPath.class);
         typeRegistry.addType(new JsonPath2016Type(irJsonPathJsonCodec));
+        this.expressionCodec = codecFactory.jsonCodec(Expression.class);
         this.joinCompiler = new JoinCompiler(typeOperators);
         this.hashStrategyCompiler = new FlatHashStrategyCompiler(typeOperators, new NullSafeHashCompiler(typeOperators));
         PageIndexerFactory pageIndexerFactory = new GroupByHashPageIndexerFactory(hashStrategyCompiler);
@@ -423,6 +433,9 @@ public class PlanTester
         this.accessControl = new TestingAccessControlManager(transactionManager, eventListenerManager, secretsResolver);
         accessControl.loadSystemAccessControl(AllowAllSystemAccessControl.NAME, ImmutableMap.of());
 
+        FunctionManager functionManager = new FunctionManager(createFunctionProvider(catalogManager), globalFunctionCatalog, languageFunctionManager);
+        this.plannerContext = new PlannerContext(metadata, typeOperators, blockEncodingSerde, typeManager, functionManager, languageFunctionManager, tracer);
+        this.connectorExpressionEvaluator = new InternalConnectorExpressionEvaluator(plannerContext, expressionCodec);
         NodeInfo nodeInfo = new NodeInfo("test");
         catalogFactory.setCatalogFactory(new DefaultCatalogFactory(
                 metadata,
@@ -448,7 +461,6 @@ public class PlanTester
         this.nodePartitioningManager = new NodePartitioningManager(nodeScheduler, createNodePartitioningProvider(catalogManager));
         this.partitionFunctionProvider = new PartitionFunctionProvider(hashCompiler, createNodePartitioningProvider(catalogManager));
         TableProceduresRegistry tableProceduresRegistry = new TableProceduresRegistry(createTableProceduresProvider(catalogManager));
-        FunctionManager functionManager = new FunctionManager(createFunctionProvider(catalogManager), globalFunctionCatalog, languageFunctionManager);
         this.schemaPropertyManager = createSchemaPropertyManager(catalogManager);
         this.columnPropertyManager = createColumnPropertyManager(catalogManager);
         this.tablePropertyManager = createTablePropertyManager(catalogManager);
@@ -464,7 +476,6 @@ public class PlanTester
                 new JsonValueFunction(functionManager, metadata, typeManager),
                 new JsonQueryFunction(functionManager, metadata, typeManager)));
 
-        this.plannerContext = new PlannerContext(metadata, typeOperators, blockEncodingSerde, typeManager, functionManager, languageFunctionManager, tracer);
         this.pageFunctionCompiler = new PageFunctionCompiler(functionManager, metadata, typeManager, 0);
         ColumnarFilterCompiler filterCompiler = new ColumnarFilterCompiler(plannerContext, 0);
         this.expressionCompiler = new ExpressionCompiler(pageFunctionCompiler, filterCompiler);
@@ -607,6 +618,16 @@ public class PlanTester
     public PlannerContext getPlannerContext()
     {
         return plannerContext;
+    }
+
+    public JsonCodec<Expression> getExpressionCodec()
+    {
+        return expressionCodec;
+    }
+
+    public ConnectorExpressionEvaluator getExpressionEvaluator()
+    {
+        return connectorExpressionEvaluator;
     }
 
     public TablePropertyManager getTablePropertyManager()

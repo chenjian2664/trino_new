@@ -21,6 +21,8 @@ import io.trino.connector.MockConnectorFactory;
 import io.trino.connector.MockConnectorTableHandle;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
+import io.trino.spi.connector.ConnectorExpressionEvaluator;
+import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTableProperties;
 import io.trino.spi.connector.ConnectorViewDefinition;
 import io.trino.spi.connector.Constraint;
@@ -130,7 +132,7 @@ public class TestRemoveEmptyUnionBranches
 
     private MockConnectorFactory.ApplyFilter applyFilter()
     {
-        return (_, table, constraint) -> {
+        return (session, table, constraint) -> {
             if (table instanceof MockConnectorTableHandle handle) {
                 SchemaTableName schemaTable = handle.getTableName();
                 if (schemaTable.getSchemaName().equals(SCHEMA_NAME) && tables.contains(schemaTable.getTableName())) {
@@ -140,7 +142,7 @@ public class TestRemoveEmptyUnionBranches
                             .filter((columnHandle, _) -> shouldPushdown.test(columnHandle)));
 
                     // Check if predicate and constraint lead to Tupledomain.none().
-                    boolean nonePredicateOnPushdownColumn = discoveredNonePredicateOnPushdownColumn(newDomain, constraint);
+                    boolean nonePredicateOnPushdownColumn = discoveredNonePredicateOnPushdownColumn(newDomain, constraint, session);
                     if (nonePredicateOnPushdownColumn) {
                         return Optional.of(
                                 new ConstraintApplicationResult<>(
@@ -171,31 +173,30 @@ public class TestRemoveEmptyUnionBranches
 
     // This method tries to detect whether we encountered a domain and a predicate that yields no values - and hence
     // results in a "none" domain effectively.
-    private boolean discoveredNonePredicateOnPushdownColumn(TupleDomain<ColumnHandle> domain, Constraint constraint)
+    private boolean discoveredNonePredicateOnPushdownColumn(TupleDomain<ColumnHandle> domain, Constraint constraint, ConnectorSession session)
     {
-        if (domain.isNone() || constraint.predicate().isEmpty()) {
+        Map<String, ColumnHandle> assignments = constraint.getAssignments();
+        ConnectorExpressionEvaluator.Prepared prepared = getPlanTester().getExpressionEvaluator()
+                .prepare(constraint.getExpression(), session);
+        if (domain.isNone() || prepared.getArguments().isEmpty()) {
             // We're not discovering a new "none" domain if the domain is already none OR
             // predicate isn't present
             return false;
         }
-
-        Domain pushdownColumnDomain = domain.getDomains().get().get(columnHandles.get(pushdownColumn));
-        Optional<Predicate<Map<ColumnHandle, NullableValue>>> predicate = constraint.predicate();
-
-        if (pushdownColumnDomain != null && pushdownColumnDomain.isNullableDiscreteSet()) {
-            Domain.DiscreteSet discreteSet = pushdownColumnDomain.getNullableDiscreteSet();
-            if (discreteSet != null) {
-                List<NullableValue> nullableValues = discreteSet.getNonNullValues().stream()
-                        .map(object -> NullableValue.of(VARCHAR, object))
-                        .collect(toImmutableList());
-                ColumnHandle columnHandle = new MockConnectorColumnHandle("c", VARCHAR);
-
-                return nullableValues.stream()
-                        .allMatch(value -> !predicate.get().test(ImmutableMap.of(columnHandle, value)));
-            }
+        ColumnHandle handle = columnHandles.get(pushdownColumn);
+        Optional<String> variableName = assignments.entrySet().stream()
+                .filter(e -> e.getValue().equals(handle))
+                .map(Map.Entry::getKey)
+                .findFirst();
+        if (variableName.isEmpty()) {
+            return false;
         }
-
-        return false;
+        return domain.getDomains()
+                .map(domains -> domains.get(handle))
+                .filter(Domain::isSingleValue)
+                .map(d -> new NullableValue(VARCHAR, d.getSingleValue()))
+                .map(value -> Boolean.FALSE.equals(prepared.evaluate(Map.of(variableName.get(), value)).orElse(null)))
+                .orElse(false);
     }
 
     @Test

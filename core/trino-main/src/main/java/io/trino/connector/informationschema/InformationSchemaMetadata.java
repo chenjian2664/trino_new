@@ -25,6 +25,7 @@ import io.trino.metadata.QualifiedTablePrefix;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
+import io.trino.spi.connector.ConnectorExpressionEvaluator;
 import io.trino.spi.connector.ConnectorMetadata;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTableHandle;
@@ -36,6 +37,7 @@ import io.trino.spi.connector.ConstraintApplicationResult;
 import io.trino.spi.connector.LimitApplicationResult;
 import io.trino.spi.connector.RelationColumnsMetadata;
 import io.trino.spi.connector.SchemaTableName;
+import io.trino.spi.expression.Constant;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.EquatableValueSet;
 import io.trino.spi.predicate.NullableValue;
@@ -49,7 +51,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
-import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 
@@ -84,12 +85,14 @@ public class InformationSchemaMetadata
     private final String catalogName;
     private final Metadata metadata;
     private final int maxPrefetchedInformationSchemaPrefixes;
+    private final ConnectorExpressionEvaluator connectorExpressionEvaluator;
 
-    public InformationSchemaMetadata(String catalogName, Metadata metadata, int maxPrefetchedInformationSchemaPrefixes)
+    public InformationSchemaMetadata(String catalogName, Metadata metadata, int maxPrefetchedInformationSchemaPrefixes, ConnectorExpressionEvaluator connectorExpressionEvaluator)
     {
         this.catalogName = requireNonNull(catalogName, "catalogName is null");
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.maxPrefetchedInformationSchemaPrefixes = maxPrefetchedInformationSchemaPrefixes;
+        this.connectorExpressionEvaluator = requireNonNull(connectorExpressionEvaluator, "connectorExpressionEvaluator is null");
     }
 
     @Override
@@ -231,9 +234,11 @@ public class InformationSchemaMetadata
             return ImmutableSet.of();
         }
 
+        ConnectorExpressionEvaluator.Prepared prepared = connectorExpressionEvaluator.prepare(
+                constraint.getExpression(), session);
         InformationSchemaTable informationSchemaTable = table.table();
-        Set<QualifiedTablePrefix> schemaPrefixes = calculatePrefixesWithSchemaName(session, constraint.getSummary(), constraint.predicate());
-        Set<QualifiedTablePrefix> tablePrefixes = calculatePrefixesWithTableName(informationSchemaTable, session, schemaPrefixes, constraint.getSummary(), constraint.predicate());
+        Set<QualifiedTablePrefix> schemaPrefixes = calculatePrefixesWithSchemaName(session, constraint, prepared);
+        Set<QualifiedTablePrefix> tablePrefixes = calculatePrefixesWithTableName(informationSchemaTable, session, schemaPrefixes, constraint, prepared);
         verify(tablePrefixes.size() <= maxPrefetchedInformationSchemaPrefixes, "calculatePrefixesWithTableName returned too many prefixes: %s", tablePrefixes.size());
         return tablePrefixes;
     }
@@ -245,14 +250,14 @@ public class InformationSchemaMetadata
 
     private Set<QualifiedTablePrefix> calculatePrefixesWithSchemaName(
             ConnectorSession connectorSession,
-            TupleDomain<ColumnHandle> constraint,
-            Optional<Predicate<Map<ColumnHandle, NullableValue>>> predicate)
+            Constraint constraint,
+            ConnectorExpressionEvaluator.Prepared prepared)
     {
-        Optional<Set<String>> schemas = filterString(constraint, SCHEMA_COLUMN_HANDLE);
+        Optional<Set<String>> schemas = filterString(constraint.getSummary(), SCHEMA_COLUMN_HANDLE);
         if (schemas.isPresent()) {
             Set<QualifiedTablePrefix> schemasFromPredicate = schemas.get().stream()
                     .filter(this::isLowerCase)
-                    .filter(schema -> predicate.isEmpty() || predicate.get().test(schemaAsFixedValues(schema)))
+                    .filter(schema -> !Boolean.FALSE.equals(prepared.evaluate(schemaAsFixedValues(schema, constraint.getAssignments())).orElse(null)))
                     .map(schema -> new QualifiedTablePrefix(catalogName, schema))
                     .collect(toImmutableSet());
             if (schemasFromPredicate.size() > maxPrefetchedInformationSchemaPrefixes) {
@@ -261,13 +266,13 @@ public class InformationSchemaMetadata
             return schemasFromPredicate;
         }
 
-        if (predicate.isEmpty()) {
+        if (Constant.TRUE.equals(constraint.getExpression()) || prepared.getArguments().isEmpty()) {
             return ImmutableSet.of(new QualifiedTablePrefix(catalogName));
         }
 
         Session session = ((FullConnectorSession) connectorSession).getSession();
         Set<QualifiedTablePrefix> schemaPrefixes = listSchemaNames(session)
-                .filter(prefix -> predicate.get().test(schemaAsFixedValues(prefix.getSchemaName().get())))
+                .filter(prefix -> !Boolean.FALSE.equals(prepared.evaluate(schemaAsFixedValues(prefix.getSchemaName().get(), constraint.getAssignments())).orElse(null)))
                 .collect(toImmutableSet());
         if (schemaPrefixes.size() > maxPrefetchedInformationSchemaPrefixes) {
             // in case of high number of prefixes it is better to populate all data and then filter
@@ -281,12 +286,12 @@ public class InformationSchemaMetadata
             InformationSchemaTable informationSchemaTable,
             ConnectorSession connectorSession,
             Set<QualifiedTablePrefix> prefixes,
-            TupleDomain<ColumnHandle> constraint,
-            Optional<Predicate<Map<ColumnHandle, NullableValue>>> predicate)
+            Constraint constraint,
+            ConnectorExpressionEvaluator.Prepared prepared)
     {
         Session session = ((FullConnectorSession) connectorSession).getSession();
 
-        Optional<Set<String>> tables = filterString(constraint, TABLE_NAME_COLUMN_HANDLE);
+        Optional<Set<String>> tables = filterString(constraint.getSummary(), TABLE_NAME_COLUMN_HANDLE);
         if (tables.isPresent()) {
             Set<QualifiedTablePrefix> tablePrefixes = prefixes.stream()
                     .peek(prefix -> verify(prefix.asQualifiedObjectName().isEmpty()))
@@ -296,7 +301,7 @@ public class InformationSchemaMetadata
                     .flatMap(prefix -> tables.get().stream()
                             .filter(this::isLowerCase)
                             .map(table -> new QualifiedObjectName(catalogName, prefix.getSchemaName().get(), table)))
-                    .filter(objectName -> predicate.isEmpty() || predicate.get().test(asFixedValues(objectName)))
+                    .filter(objectName -> !Boolean.FALSE.equals(prepared.evaluate(asFixedValues(objectName, constraint.getAssignments())).orElse(null)))
                     .map(QualifiedObjectName::asQualifiedTablePrefix)
                     .distinct()
                     .limit(maxPrefetchedInformationSchemaPrefixes + 1)
@@ -310,13 +315,13 @@ public class InformationSchemaMetadata
             return tablePrefixes;
         }
 
-        if (predicate.isEmpty() || !isColumnsEnumeratingTable(informationSchemaTable)) {
+        if (prepared.getArguments().isEmpty() || !isColumnsEnumeratingTable(informationSchemaTable)) {
             return prefixes;
         }
 
         Set<QualifiedTablePrefix> tablePrefixes = prefixes.stream()
                 .flatMap(prefix -> metadata.listTables(session, prefix).stream())
-                .filter(objectName -> predicate.get().test(asFixedValues(objectName)))
+                .filter(objectName -> !Boolean.FALSE.equals(prepared.evaluate(asFixedValues(objectName, constraint.getAssignments())).orElse(null)))
                 .map(QualifiedObjectName::asQualifiedTablePrefix)
                 .distinct()
                 .limit(maxPrefetchedInformationSchemaPrefixes + 1)
@@ -375,17 +380,30 @@ public class InformationSchemaMetadata
         return Optional.empty();
     }
 
-    private Map<ColumnHandle, NullableValue> schemaAsFixedValues(String schema)
+    private static Map<String, NullableValue> schemaAsFixedValues(String schema, Map<String, ColumnHandle> assignments)
     {
-        return ImmutableMap.of(SCHEMA_COLUMN_HANDLE, new NullableValue(createUnboundedVarcharType(), utf8Slice(schema)));
+        return assignments.entrySet().stream()
+                .filter(assignment -> SCHEMA_COLUMN_HANDLE.equals(assignment.getValue()))
+                .findFirst()
+                .map(columnHandleEntry -> ImmutableMap.of(columnHandleEntry.getKey(), new NullableValue(createUnboundedVarcharType(), utf8Slice(schema))))
+                .orElse(ImmutableMap.of());
     }
 
-    private Map<ColumnHandle, NullableValue> asFixedValues(QualifiedObjectName objectName)
+    private static Map<String, NullableValue> asFixedValues(QualifiedObjectName objectName, Map<String, ColumnHandle> assignments)
     {
-        return ImmutableMap.of(
-                CATALOG_COLUMN_HANDLE, new NullableValue(createUnboundedVarcharType(), utf8Slice(objectName.catalogName())),
-                SCHEMA_COLUMN_HANDLE, new NullableValue(createUnboundedVarcharType(), utf8Slice(objectName.schemaName())),
-                TABLE_NAME_COLUMN_HANDLE, new NullableValue(createUnboundedVarcharType(), utf8Slice(objectName.objectName())));
+        ImmutableMap.Builder<String, NullableValue> builder = ImmutableMap.builder();
+        for (Map.Entry<String, ColumnHandle> entry : assignments.entrySet()) {
+            if (CATALOG_COLUMN_HANDLE.equals(entry.getValue())) {
+                builder.put(entry.getKey(), new NullableValue(createUnboundedVarcharType(), utf8Slice(objectName.catalogName())));
+            }
+            else if (SCHEMA_COLUMN_HANDLE.equals(entry.getValue())) {
+                builder.put(entry.getKey(), new NullableValue(createUnboundedVarcharType(), utf8Slice(objectName.schemaName())));
+            }
+            else if (TABLE_NAME_COLUMN_HANDLE.equals(entry.getValue())) {
+                builder.put(entry.getKey(), new NullableValue(createUnboundedVarcharType(), utf8Slice(objectName.objectName())));
+            }
+        }
+        return builder.buildOrThrow();
     }
 
     private boolean isLowerCase(String value)

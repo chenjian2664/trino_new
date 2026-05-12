@@ -16,6 +16,7 @@ package io.trino.connector.system;
 import io.trino.node.InternalNode;
 import io.trino.node.InternalNodeManager;
 import io.trino.security.AccessControl;
+import io.trino.spi.connector.ConnectorExpressionEvaluator;
 import io.trino.spi.connector.ConnectorMetadata;
 import io.trino.spi.connector.ConnectorPageSourceProvider;
 import io.trino.spi.connector.ConnectorPageSourceProviderFactory;
@@ -46,7 +47,8 @@ public class SystemConnector
             Function<TransactionId, ConnectorTransactionHandle> transactionHandleFunction,
             AccessControl accessControl,
             String catalogName,
-            Optional<ConnectorPageSourceProviderFactory> pageSourceProviderFactory)
+            Optional<ConnectorPageSourceProviderFactory> pageSourceProviderFactory,
+            ConnectorExpressionEvaluator connectorExpressionEvaluator)
     {
         requireNonNull(currentNode, "currentNode is null");
         requireNonNull(nodeManager, "nodeManager is null");
@@ -54,8 +56,9 @@ public class SystemConnector
         requireNonNull(transactionHandleFunction, "transactionHandleFunction is null");
         requireNonNull(accessControl, "accessControl is null");
         requireNonNull(catalogName, "catalogName is null");
+        requireNonNull(connectorExpressionEvaluator, "connectorExpressionEvaluator is null");
 
-        this.metadata = new SystemTablesMetadata(tables);
+        this.metadata = new SystemTablesMetadata(tables, connectorExpressionEvaluator);
         this.splitManager = new SystemSplitManager(currentNode, nodeManager, tables);
         this.pageSourceProvider = new SystemPageSourceProvider(tables, accessControl, catalogName, pageSourceProviderFactory);
         this.transactionHandleFunction = transactionHandleFunction;
