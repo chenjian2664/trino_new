@@ -23,6 +23,7 @@ import io.trino.metastore.HiveMetastoreFactory;
 import io.trino.metastore.RawHiveMetastoreFactory;
 import io.trino.plugin.iceberg.catalog.TrinoCatalogFactory;
 import io.trino.plugin.iceberg.delete.DeletionVectorWriter;
+import io.trino.spi.connector.ConnectorExpressionEvaluator;
 import io.trino.spi.security.ConnectorIdentity;
 import io.trino.spi.type.TypeManager;
 
@@ -52,6 +53,7 @@ public class IcebergMetadataFactory
     private final DeletionVectorWriter deletionVectorWriter;
     private final int materializedViewRefreshMaxSnapshotsToExpire;
     private final Duration materializedViewRefreshSnapshotRetentionPeriod;
+    private final ConnectorExpressionEvaluator connectorExpressionEvaluator;
 
     @Inject
     public IcebergMetadataFactory(
@@ -67,7 +69,8 @@ public class IcebergMetadataFactory
             @ForIcebergMetadata ExecutorService metadataExecutorService,
             @ForIcebergPlanning ExecutorService icebergPlanningExecutor,
             @ForIcebergFileDelete ExecutorService icebergFileDeleteExecutor,
-            IcebergConfig config)
+            IcebergConfig config,
+            ConnectorExpressionEvaluator connectorExpressionEvaluator)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.commitTaskCodec = requireNonNull(commitTaskCodec, "commitTaskCodec is null");
@@ -96,6 +99,7 @@ public class IcebergMetadataFactory
         this.icebergFileDeleteExecutor = requireNonNull(icebergFileDeleteExecutor, "icebergFileDeleteExecutor is null");
         this.materializedViewRefreshMaxSnapshotsToExpire = config.getMaterializedViewRefreshMaxSnapshotsToExpire();
         this.materializedViewRefreshSnapshotRetentionPeriod = config.getMaterializedViewRefreshSnapshotRetentionPeriod();
+        this.connectorExpressionEvaluator = requireNonNull(connectorExpressionEvaluator, "connectorExpressionEvaluator is null");
     }
 
     public IcebergMetadata create(ConnectorIdentity identity)
@@ -116,6 +120,7 @@ public class IcebergMetadataFactory
                 icebergPlanningExecutor,
                 icebergFileDeleteExecutor,
                 materializedViewRefreshMaxSnapshotsToExpire,
-                materializedViewRefreshSnapshotRetentionPeriod);
+                materializedViewRefreshSnapshotRetentionPeriod,
+                connectorExpressionEvaluator);
     }
 }
