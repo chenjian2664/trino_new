@@ -74,6 +74,7 @@ public class DefaultCatalogFactory
 
     private final ConcurrentMap<ConnectorName, ConnectorFactory> connectorFactories = new ConcurrentHashMap<>();
     private final SecretsResolver secretsResolver;
+    private final ConnectorExpressionEvaluator connectorExpressionEvaluator;
 
     @Inject
     public DefaultCatalogFactory(
@@ -89,7 +90,8 @@ public class DefaultCatalogFactory
             TypeManager typeManager,
             NodeSchedulerConfig nodeSchedulerConfig,
             OptimizerConfig optimizerConfig,
-            SecretsResolver secretsResolver)
+            SecretsResolver secretsResolver,
+            ConnectorExpressionEvaluator connectorExpressionEvaluator)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.accessControl = requireNonNull(accessControl, "accessControl is null");
@@ -104,6 +106,7 @@ public class DefaultCatalogFactory
         this.schedulerIncludeCoordinator = nodeSchedulerConfig.isIncludeCoordinator();
         this.maxPrefetchedInformationSchemaPrefixes = optimizerConfig.getMaxPrefetchedInformationSchemaPrefixes();
         this.secretsResolver = requireNonNull(secretsResolver, "secretsResolver is null");
+        this.connectorExpressionEvaluator = requireNonNull(connectorExpressionEvaluator, "connectorExpressionEvaluator is null");
     }
 
     @Override
@@ -156,7 +159,7 @@ public class DefaultCatalogFactory
                         metadata,
                         accessControl,
                         maxPrefetchedInformationSchemaPrefixes,
-                        ConnectorExpressionEvaluator.NO_OP));
+                        connectorExpressionEvaluator));
 
         SystemTablesProvider systemTablesProvider = new SystemTablesProvider(
                 transactionManager,
@@ -175,7 +178,7 @@ public class DefaultCatalogFactory
                         accessControl,
                         catalogHandle.getCatalogName().toString(),
                         catalogConnector.getPageSourceProviderFactory(),
-                        ConnectorExpressionEvaluator.NO_OP));
+                        connectorExpressionEvaluator));
 
         return new CatalogConnector(
                 catalogHandle,
@@ -198,7 +201,7 @@ public class DefaultCatalogFactory
                 pageSorter,
                 pageIndexerFactory,
                 new InternalFunctionBundleFactory(),
-                ConnectorExpressionEvaluator.NO_OP);
+                connectorExpressionEvaluator);
 
         try (ThreadContextClassLoader _ = new ThreadContextClassLoader(connectorFactory.getClass().getClassLoader())) {
             // TODO: connector factory should take CatalogName

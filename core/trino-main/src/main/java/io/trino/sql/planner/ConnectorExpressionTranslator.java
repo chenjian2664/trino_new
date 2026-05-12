@@ -39,6 +39,7 @@ import io.trino.spi.type.VarcharType;
 import io.trino.sql.PlannerContext;
 import io.trino.sql.ir.Between;
 import io.trino.sql.ir.Bind;
+import io.trino.sql.ir.Booleans;
 import io.trino.sql.ir.Call;
 import io.trino.sql.ir.Cast;
 import io.trino.sql.ir.Coalesce;
@@ -114,6 +115,7 @@ import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.trino.sql.ir.IrExpressions.not;
 import static io.trino.sql.ir.IrUtils.combineConjuncts;
 import static io.trino.sql.ir.IrUtils.extractConjuncts;
+import static io.trino.sql.planner.InternalConnectorExpressionEvaluator.ENGINE_PREDICATE_FUNCTION_NAME;
 import static io.trino.type.JoniRegexpType.JONI_REGEXP;
 import static io.trino.type.LikeFunctions.LIKE_FUNCTION_NAME;
 import static io.trino.type.LikeFunctions.LIKE_PATTERN_FUNCTION_NAME;
@@ -248,6 +250,10 @@ public final class ConnectorExpressionTranslator
 
         protected Optional<Expression> translateCall(io.trino.spi.expression.Call call, Map<String, Symbol> lambdaArguments)
         {
+            if (call.getFunctionName().equals(ENGINE_PREDICATE_FUNCTION_NAME)) {
+                return Optional.of(Booleans.TRUE);
+            }
+
             if (call.getFunctionName().getCatalogSchema().isPresent()) {
                 CatalogSchemaName catalogSchemaName = call.getFunctionName().getCatalogSchema().get();
                 checkArgument(!catalogSchemaName.getCatalogName().equals(GlobalSystemConnector.NAME), "System functions must not be fully qualified");
