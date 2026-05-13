@@ -34,7 +34,6 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
 import java.util.Map;
-import java.util.Set;
 
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.trino.plugin.base.filter.UtcConstraintExtractor.extractTupleDomain;
@@ -74,11 +73,7 @@ public class TestUtcConstraintExtractor
                 new Constraint(
                         TupleDomain.withColumnDomains(Map.of(A_BIGINT, Domain.singleValue(BIGINT, 1L))),
                         Constant.TRUE,
-                        Map.of(),
-                        _ -> {
-                            throw new AssertionError("should not be called");
-                        },
-                        Set.of(A_BIGINT))))
+                        Map.of())))
                 .isEqualTo(TupleDomain.withColumnDomains(Map.of(A_BIGINT, Domain.singleValue(BIGINT, 1L))));
     }
 
