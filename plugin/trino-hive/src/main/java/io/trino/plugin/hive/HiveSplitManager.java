@@ -99,6 +99,7 @@ import static java.util.Collections.emptyIterator;
 import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 import static java.util.Objects.requireNonNullElse;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class HiveSplitManager
         implements ConnectorSplitManager
@@ -332,7 +333,8 @@ public class HiveSplitManager
 
         Iterator<List<HivePartition>> partitionNameBatches = partitionExponentially(hivePartitions, minPartitionBatchSize, maxPartitionBatchSize);
         Iterator<List<HivePartitionMetadata>> partitionBatches = transform(partitionNameBatches, partitionBatch -> {
-            TupleDomain<ColumnHandle> currentDynamicFilter = dynamicFilterState.awaitAndGet().currentPredicate();
+            // Use dynamic filters to reduce the partitions listed by getPartitionsByNames
+            TupleDomain<ColumnHandle> currentDynamicFilter = dynamicFilterState.get(20, SECONDS).currentPredicate();
             if (!currentDynamicFilter.isAll()) {
                 TupleDomain<ColumnHandle> partitionsFilter = currentDynamicFilter.intersect(tableHandle.getCompactEffectivePredicate());
                 partitionBatch = partitionBatch.stream()

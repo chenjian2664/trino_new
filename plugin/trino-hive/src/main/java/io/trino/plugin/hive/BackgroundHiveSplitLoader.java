@@ -334,7 +334,7 @@ public class BackgroundHiveSplitLoader
             throws IOException
     {
         if (!dynamicFilterState.isReady()) {
-            return toListenableFuture(dynamicFilterState.await());
+            return toListenableFuture(dynamicFilterState.isBlocked());
         }
         Iterator<InternalHiveSplit> splits = fileIterators.poll();
         if (splits == null) {

@@ -70,7 +70,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -93,6 +92,7 @@ import static io.trino.metastore.HiveType.HIVE_STRING;
 import static io.trino.plugin.hive.BackgroundHiveSplitLoader.BucketSplitInfo.createBucketSplitInfo;
 import static io.trino.plugin.hive.BackgroundHiveSplitLoader.getBucketNumber;
 import static io.trino.plugin.hive.BackgroundHiveSplitLoader.hasAttemptId;
+import static io.trino.plugin.hive.DynamicFilterState.completedState;
 import static io.trino.plugin.hive.HiveColumnHandle.createBaseColumn;
 import static io.trino.plugin.hive.HiveColumnHandle.pathColumnHandle;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_INVALID_BUCKET_FILES;
@@ -317,23 +317,17 @@ public class TestBackgroundHiveSplitLoader
 
     @Test
     @Timeout(30)
-    public void testIncompleteDynamicFilterTimeout()
+    public void testSplitsLoadedWithCompleteFilter()
             throws Exception
     {
-        CompletableFuture<?> isBlocked = new CompletableFuture<>();
-        try {
-            BackgroundHiveSplitLoader backgroundHiveSplitLoader = backgroundHiveSplitLoader(
-                    ImmutableSet.of(),
-                    DynamicFilterState.completeState());
-            HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
-            backgroundHiveSplitLoader.start(hiveSplitSource);
+        BackgroundHiveSplitLoader backgroundHiveSplitLoader = backgroundHiveSplitLoader(
+                ImmutableSet.of(),
+                completedState());
+        HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
+        backgroundHiveSplitLoader.start(hiveSplitSource);
 
-            assertThat(drain(hiveSplitSource)).hasSize(2);
-            assertThat(hiveSplitSource.isFinished()).isTrue();
-        }
-        finally {
-            isBlocked.complete(null);
-        }
+        assertThat(drain(hiveSplitSource)).hasSize(2);
+        assertThat(hiveSplitSource.isFinished()).isTrue();
     }
 
     @Test
@@ -475,7 +469,7 @@ public class TestBackgroundHiveSplitLoader
                 Optional.empty(),
                 100,
                 ImmutableSet.of(),
-                DynamicFilterState.completeState());
+                completedState());
 
         HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
         backgroundHiveSplitLoader.start(hiveSplitSource);
@@ -1140,7 +1134,7 @@ public class TestBackgroundHiveSplitLoader
                 tablePartitioning,
                 Optional.empty(),
                 ImmutableSet.of(),
-                DynamicFilterState.completeState());
+                completedState());
     }
 
     private BackgroundHiveSplitLoader backgroundHiveSplitLoader(
@@ -1160,7 +1154,7 @@ public class TestBackgroundHiveSplitLoader
                 tablePartitioning,
                 validWriteIds,
                 ImmutableSet.of(),
-                DynamicFilterState.completeState());
+                completedState());
     }
 
     private BackgroundHiveSplitLoader backgroundHiveSplitLoader(
@@ -1244,7 +1238,7 @@ public class TestBackgroundHiveSplitLoader
                 Optional.empty(),
                 maxPartitions,
                 ImmutableSet.of(),
-                DynamicFilterState.completeState());
+                completedState());
     }
 
     private BackgroundHiveSplitLoader backgroundHiveSplitLoaderOfflinePartitions()
@@ -1272,7 +1266,7 @@ public class TestBackgroundHiveSplitLoader
                 Optional.empty(),
                 100,
                 ImmutableSet.of(),
-                DynamicFilterState.completeState());
+                completedState());
     }
 
     private static Iterator<HivePartitionMetadata> createPartitionMetadataWithOfflinePartitions()
@@ -1312,7 +1306,7 @@ public class TestBackgroundHiveSplitLoader
                 new CounterStat(),
                 new NoopSplitAffinityProvider(),
                 false,
-                DynamicFilterState.completeState());
+                completedState());
     }
 
     private static Table table(

@@ -41,7 +41,7 @@ public final class PartitionMatchSupplier
 
     private PartitionMatchSupplier(DynamicFilterState dynamicFilterState, HivePartition hivePartition, List<HiveColumnHandle> partitionColumns)
     {
-        this.dynamicFilterState = requireNonNull(dynamicFilterState, "dynamicFilterSupplier is null");
+        this.dynamicFilterState = requireNonNull(dynamicFilterState, "dynamicFilterState is null");
         this.hivePartition = requireNonNull(hivePartition, "hivePartition is null");
         this.partitionColumns = ImmutableList.copyOf(requireNonNull(partitionColumns, "partitionColumns is null"));
     }
@@ -60,7 +60,6 @@ public final class PartitionMatchSupplier
     private boolean evaluateCurrentDynamicFilter()
     {
         ConnectorDynamicFilter dynamicFilter = dynamicFilterState.get();
-        // Must be checked before calling dynamicFilter.currentPredicate()
         boolean filterIsComplete = dynamicFilter.isComplete();
         TupleDomain<ColumnHandle> currentPredicate = dynamicFilter.currentPredicate();
         boolean partitionMatches = partitionMatches(partitionColumns, currentPredicate, hivePartition);

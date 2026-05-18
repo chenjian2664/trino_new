@@ -17,6 +17,9 @@ import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.predicate.TupleDomain;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static java.util.Objects.requireNonNull;
 
@@ -24,7 +27,7 @@ import static java.util.Objects.requireNonNull;
  * Tracks the evolving dynamic filter state for a single Hive table scan.
  * <p>
  * {@link #update} is called by {@link HiveSplitSource#getNextBatch} on every engine batch call.
- * {@link #awaitAndGet()} blocks until the first snapshot has arrived, acting as a gate for
+ * {@link #isBlocked()} blocks until the first snapshot has arrived, acting as a gate for
  * {@link BackgroundHiveSplitLoader} to avoid producing un-pruned splits before the engine's
  * dynamic-filter wait window has closed.
  */
@@ -44,7 +47,22 @@ public class DynamicFilterState
         return latest;
     }
 
-    public CompletableFuture<Void> await()
+    public ConnectorDynamicFilter get(long timeout, TimeUnit unit)
+    {
+        try {
+            firstArrival.get(timeout, unit);
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+        catch (ExecutionException | TimeoutException e) {
+            throw new RuntimeException(e);
+        }
+        return latest;
+    }
+
+    public CompletableFuture<Void> isBlocked()
     {
         return firstArrival;
     }
@@ -54,13 +72,7 @@ public class DynamicFilterState
         return firstArrival.isDone();
     }
 
-    public ConnectorDynamicFilter awaitAndGet()
-    {
-        firstArrival.join();
-        return latest;
-    }
-
-    static DynamicFilterState completeState()
+    static DynamicFilterState completedState()
     {
         DynamicFilterState state = new DynamicFilterState();
         state.update(new ConnectorDynamicFilter(TupleDomain.all(), true));
