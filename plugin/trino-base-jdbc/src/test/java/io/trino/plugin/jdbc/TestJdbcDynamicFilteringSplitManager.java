@@ -107,4 +107,34 @@ public class TestJdbcDynamicFilteringSplitManager
                 .isEqualTo(predicate);
         splitSource.close();
     }
+
+    @Test
+    public void testGetNextBatchShortCircuitsOnNonePredicate()
+            throws Exception
+    {
+        AtomicReference<ConnectorTableHandle> capturedTableHandle = new AtomicReference<>();
+        JdbcDynamicFilteringSplitManager manager = new JdbcDynamicFilteringSplitManager(
+                new ConnectorSplitManager()
+                {
+                    @Override
+                    public ConnectorSplitSource getSplits(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorTableHandle table, Set<ColumnHandle> dynamicFilterColumns, Constraint constraint)
+                    {
+                        capturedTableHandle.set(table);
+                        return new FixedSplitSource(ImmutableList.of(new JdbcSplit(Optional.empty())));
+                    }
+                });
+        Set<ColumnHandle> dynamicFilterColumns = ImmutableSet.of(new TestColumnHandle());
+        ConnectorSplitSource splitSource = manager.getSplits(
+                TRANSACTION_HANDLE,
+                SESSION,
+                TABLE_HANDLE,
+                dynamicFilterColumns,
+                alwaysTrue());
+
+        ConnectorSplitSource.ConnectorSplitBatch batch = splitSource.getNextBatch(100, new ConnectorDynamicFilter(TupleDomain.none(), true)).get();
+        assertThat(batch.getSplits()).isEmpty();
+        assertThat(batch.isNoMoreSplits()).isTrue();
+        assertThat(capturedTableHandle.get()).isNull();
+        splitSource.close();
+    }
 }
