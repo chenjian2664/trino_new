@@ -14,10 +14,8 @@
 package io.trino.spi.connector;
 
 import io.trino.spi.function.table.ConnectorTableFunctionHandle;
-import io.trino.spi.predicate.TupleDomain;
 
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 
 public interface ConnectorSplitManager
 {
@@ -31,60 +29,12 @@ public interface ConnectorSplitManager
      *
      * @since 481
      */
-    default ConnectorSplitSource getSplits(
+    ConnectorSplitSource getSplits(
             ConnectorTransactionHandle transaction,
             ConnectorSession session,
             ConnectorTableHandle table,
             Set<ColumnHandle> dynamicFilterColumns,
-            Constraint constraint)
-    {
-        return getSplits(transaction, session, table, new DynamicFilter()
-        {
-            @Override
-            public Set<ColumnHandle> getColumnsCovered()
-            {
-                return dynamicFilterColumns;
-            }
-
-            @Override
-            public CompletableFuture<?> isBlocked()
-            {
-                return NOT_BLOCKED;
-            }
-
-            @Override
-            public boolean isComplete()
-            {
-                return true;
-            }
-
-            @Override
-            public boolean isAwaitable()
-            {
-                return false;
-            }
-
-            @Override
-            public TupleDomain<ColumnHandle> getCurrentPredicate()
-            {
-                return TupleDomain.all();
-            }
-        }, constraint);
-    }
-
-    /**
-     * @deprecated Use {@link #getSplits(ConnectorTransactionHandle, ConnectorSession, ConnectorTableHandle, Set, Constraint)} instead.
-     */
-    @Deprecated(forRemoval = true, since = "481")
-    default ConnectorSplitSource getSplits(
-            ConnectorTransactionHandle transaction,
-            ConnectorSession session,
-            ConnectorTableHandle table,
-            DynamicFilter dynamicFilter,
-            Constraint constraint)
-    {
-        throw new UnsupportedOperationException();
-    }
+            Constraint constraint);
 
     default ConnectorSplitSource getSplits(
             ConnectorTransactionHandle transaction,

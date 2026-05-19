@@ -220,6 +220,27 @@
                                     </old>
                                 </item>
                                 <!-- Backwards incompatible changes since the previous release -->
+                                <item>
+                                    <code>java.method.abstractMethodAddedToInterface</code>
+                                    <new>method io.trino.spi.connector.ConnectorSplitSource io.trino.spi.connector.ConnectorSplitManager::getSplits(io.trino.spi.connector.ConnectorTransactionHandle, io.trino.spi.connector.ConnectorSession, io.trino.spi.connector.ConnectorTableHandle, java.util.Set&lt;io.trino.spi.connector.ColumnHandle&gt;, io.trino.spi.connector.Constraint)</new>
+                                    <justification>Replaces getSplits(DynamicFilter) — connectors must override the new method to receive the dynamic filter column set</justification>
+                                </item>
+                                <item>
+                                    <code>java.method.parameterTypeChanged</code>
+                                    <old>method io.trino.spi.connector.ConnectorSplitSource io.trino.spi.connector.ConnectorSplitManager::getSplits(io.trino.spi.connector.ConnectorTransactionHandle, io.trino.spi.connector.ConnectorSession, io.trino.spi.connector.ConnectorTableHandle, io.trino.spi.connector.DynamicFilter, io.trino.spi.connector.Constraint)</old>
+                                    <new>method io.trino.spi.connector.ConnectorSplitSource io.trino.spi.connector.ConnectorSplitManager::getSplits(io.trino.spi.connector.ConnectorTransactionHandle, io.trino.spi.connector.ConnectorSession, io.trino.spi.connector.ConnectorTableHandle, java.util.Set&lt;io.trino.spi.connector.ColumnHandle&gt;, io.trino.spi.connector.Constraint)</new>
+                                    <justification>DynamicFilter replaced by Set&lt;ColumnHandle&gt; — predicate is now delivered per-batch via getNextBatch(int, ConnectorDynamicFilter)</justification>
+                                </item>
+                                <item>
+                                    <code>java.method.noLongerDefault</code>
+                                    <new>method io.trino.spi.connector.ConnectorSplitSource io.trino.spi.connector.ConnectorSplitManager::getSplits(io.trino.spi.connector.ConnectorTransactionHandle, io.trino.spi.connector.ConnectorSession, io.trino.spi.connector.ConnectorTableHandle, java.util.Set&lt;io.trino.spi.connector.ColumnHandle&gt;, io.trino.spi.connector.Constraint)</new>
+                                    <justification>Method is now abstract — connectors must implement it</justification>
+                                </item>
+                                <item>
+                                    <code>java.method.nowAbstract</code>
+                                    <new>method io.trino.spi.connector.ConnectorSplitSource io.trino.spi.connector.ConnectorSplitManager::getSplits(io.trino.spi.connector.ConnectorTransactionHandle, io.trino.spi.connector.ConnectorSession, io.trino.spi.connector.ConnectorTableHandle, java.util.Set&lt;io.trino.spi.connector.ColumnHandle&gt;, io.trino.spi.connector.Constraint)</new>
+                                    <justification>Method is now abstract — connectors must implement it</justification>
+                                </item>
                                 <!-- Any exclusions below can be deleted after each release -->
                                 <item>
                                     <ignore>true</ignore>
