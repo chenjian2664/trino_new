@@ -551,9 +551,6 @@ public abstract class AbstractTestCoordinatorDynamicFiltering
                         public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize, ConnectorDynamicFilter dynamicFilter)
                         {
                             if (!dynamicFilter.isComplete()) {
-                                // Filter not yet complete — return empty batch so the engine retries
-                                // with a fresh predicate snapshot. In standard mode the engine already
-                                // waited; in FTE mode the engine retries until isComplete is true.
                                 return completedFuture(new ConnectorSplitBatch(ImmutableList.of(), false));
                             }
                             capturedPredicate.set(dynamicFilter.currentPredicate());

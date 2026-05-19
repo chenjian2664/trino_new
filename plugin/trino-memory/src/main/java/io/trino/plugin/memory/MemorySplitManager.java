@@ -76,8 +76,10 @@ public final class MemorySplitManager
         }
 
         if (enableLazyDynamicFiltering && !dynamicFilterColumns.isEmpty()) {
-            // In fault-tolerant execution, the probe stage must not be scheduled before the build stage
-            // (which collects dynamic filters), otherwise it occupies all available slots and deadlocks.
+            // Needed to avoid scheduling a stage that is waiting for dynamic filters to become available.
+            // It makes no difference for pipelined execution where the stages are scheduled eagerly and there's no limit on the number of tasks running in parallel.
+            // However in fault tolerant execution if the stage waiting for dynamic filters is scheduled first it may occupy all available slots leaving no resources
+            // for the stage that collects dynamic filters to be scheduled effectively creating a deadlock.
             // Returning Long.MAX_VALUE tells the engine to wait until the dynamic filter is complete
             // before issuing the first getNextBatch call.
             return new FixedSplitSource(splits.build())
