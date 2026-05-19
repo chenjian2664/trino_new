@@ -30,7 +30,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
-import static io.airlift.units.Duration.succinctNanos;
 import static io.trino.plugin.jdbc.JdbcDynamicFilteringSessionProperties.dynamicFilteringEnabled;
 import static io.trino.plugin.jdbc.JdbcDynamicFilteringSessionProperties.getDynamicFilteringWaitTimeout;
 import static java.util.Objects.requireNonNull;
@@ -87,7 +86,6 @@ public class JdbcDynamicFilteringSplitManager
         private final Set<ColumnHandle> dynamicFilterColumns;
         private final Constraint constraint;
         private final long dynamicFilteringTimeoutMillis;
-        private final long startNanos;
 
         @GuardedBy("this")
         private Optional<ConnectorSplitSource> delegateSplitSource = Optional.empty();
@@ -105,7 +103,6 @@ public class JdbcDynamicFilteringSplitManager
             this.dynamicFilterColumns = ImmutableSet.copyOf(dynamicFilterColumns);
             this.constraint = requireNonNull(constraint, "constraint is null");
             this.dynamicFilteringTimeoutMillis = getDynamicFilteringWaitTimeout(session).toMillis();
-            this.startNanos = System.nanoTime();
         }
 
         @Override
@@ -118,10 +115,9 @@ public class JdbcDynamicFilteringSplitManager
         public CompletableFuture<ConnectorSplitBatch> getNextBatch(int maxSize, ConnectorDynamicFilter dynamicFilter)
         {
             log.debug(
-                    "Enumerating splits (query %s, table: %s, waiting time: %s, completed: %s)",
+                    "Enumerating splits (query %s, table: %s, completed: %s)",
                     session.getQueryId(),
                     table,
-                    succinctNanos(System.nanoTime() - startNanos),
                     dynamicFilter.isComplete());
             return getDelegateSplitSource(dynamicFilter).getNextBatch(maxSize, dynamicFilter);
         }

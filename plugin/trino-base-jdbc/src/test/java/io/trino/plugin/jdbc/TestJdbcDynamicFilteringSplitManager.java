@@ -19,9 +19,14 @@ import com.google.common.collect.ImmutableSet;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorDynamicFilter;
 import io.trino.spi.connector.ConnectorSession;
+import io.trino.spi.connector.ConnectorSplitManager;
 import io.trino.spi.connector.ConnectorSplitSource;
+import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTransactionHandle;
+import io.trino.spi.connector.Constraint;
+import io.trino.spi.connector.FixedSplitSource;
 import io.trino.spi.connector.SchemaTableName;
+import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.testing.TestingConnectorSession;
 import io.trino.testing.TestingSplitManager;
@@ -30,10 +35,12 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static io.trino.plugin.jdbc.JdbcDynamicFilteringSessionProperties.DYNAMIC_FILTERING_ENABLED;
 import static io.trino.plugin.jdbc.JdbcDynamicFilteringSessionProperties.DYNAMIC_FILTERING_WAIT_TIMEOUT;
 import static io.trino.spi.connector.Constraint.alwaysTrue;
+import static io.trino.spi.type.BigintType.BIGINT;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestJdbcDynamicFilteringSplitManager
@@ -73,8 +80,17 @@ public class TestJdbcDynamicFilteringSplitManager
     public void testGetNextBatchUsesDynamicFilterPredicate()
             throws Exception
     {
+        AtomicReference<ConnectorTableHandle> capturedTableHandle = new AtomicReference<>();
         JdbcDynamicFilteringSplitManager manager = new JdbcDynamicFilteringSplitManager(
-                new TestingSplitManager(ImmutableList.of()));
+                new ConnectorSplitManager()
+                {
+                    @Override
+                    public ConnectorSplitSource getSplits(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorTableHandle table, Set<ColumnHandle> dynamicFilterColumns, Constraint constraint)
+                    {
+                        capturedTableHandle.set(table);
+                        return new FixedSplitSource(ImmutableList.of(new JdbcSplit(Optional.empty())));
+                    }
+                });
         Set<ColumnHandle> dynamicFilterColumns = ImmutableSet.of(new TestColumnHandle());
         ConnectorSplitSource splitSource = manager.getSplits(
                 TRANSACTION_HANDLE,
@@ -83,11 +99,12 @@ public class TestJdbcDynamicFilteringSplitManager
                 dynamicFilterColumns,
                 alwaysTrue());
 
-        // engine delivers predicate snapshot; split source uses it to build the delegate
-        ConnectorDynamicFilter dynamicFilter = new ConnectorDynamicFilter(TupleDomain.all(), true);
-        ConnectorSplitSource.ConnectorSplitBatch batch = splitSource.getNextBatch(100, dynamicFilter).get();
-        assertThat(batch.isNoMoreSplits()).isTrue();
-        assertThat(splitSource.isFinished()).isTrue();
+        TupleDomain<ColumnHandle> predicate = TupleDomain.withColumnDomains(
+                ImmutableMap.of(new TestColumnHandle(), Domain.singleValue(BIGINT, 42L)));
+        splitSource.getNextBatch(100, new ConnectorDynamicFilter(predicate, true)).get();
+
+        assertThat(((JdbcTableHandle) capturedTableHandle.get()).getConstraint())
+                .isEqualTo(predicate);
         splitSource.close();
     }
 }
