@@ -31,7 +31,7 @@ mongodb.connection-url=mongodb://user:pass@sample.host:27017/
 
 You can have as many catalogs as you need, so if you have additional
 MongoDB clusters, simply add another properties file to `etc/catalog`
-with a different name, making sure it ends in `.properties`). For
+with a different name, making sure it ends in `.properties`. For
 example, if you name the property file `sales.properties`, Trino
 will create a catalog named `sales` using the configured connector.
 
@@ -51,8 +51,8 @@ The following configuration properties are available:
 | `mongodb.connection-timeout`             | The socket connect timeout                                                 |
 | `mongodb.socket-timeout`                 | The socket timeout                                                         |
 | `mongodb.tls.enabled`                    | Use TLS/SSL for connections to mongod/mongos                               |
-| `mongodb.tls.keystore-path`              | Path to the  or JKS key store                                              |
-| `mongodb.tls.truststore-path`            | Path to the  or JKS trust store                                            |
+| `mongodb.tls.keystore-path`              | Path to the PEM or JKS key store                                           |
+| `mongodb.tls.truststore-path`            | Path to the PEM or JKS trust store                                         |
 | `mongodb.tls.keystore-password`          | Password for the key store                                                 |
 | `mongodb.tls.truststore-password`        | Password for the trust store                                               |
 | `mongodb.read-preference`                | The read preference                                                        |
