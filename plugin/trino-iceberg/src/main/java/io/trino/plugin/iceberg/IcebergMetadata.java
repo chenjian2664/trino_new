@@ -3792,6 +3792,14 @@ public class IcebergMetadata
     @Override
     public boolean isView(ConnectorSession session, SchemaTableName viewName)
     {
+<<<<<<< HEAD
+=======
+        if (isIcebergTableName(viewName.getTableName()) && !isDataTable(viewName.getTableName())) {
+            Optional<ConnectorViewDefinition> systemView = getRawSystemView(session, viewName);
+            return systemView.isPresent();
+        }
+
+>>>>>>> 7c3b32f332f (Avoid unnecessary lookup in catalog for system tables/views)
         try {
             return catalog.getView(session, viewName).isPresent();
         }
@@ -3806,6 +3814,13 @@ public class IcebergMetadata
     @Override
     public Optional<ConnectorViewDefinition> getView(ConnectorSession session, SchemaTableName viewName)
     {
+<<<<<<< HEAD
+=======
+        if (isIcebergTableName(viewName.getTableName()) && !isDataTable(viewName.getTableName())) {
+            return getRawSystemView(session, viewName);
+        }
+
+>>>>>>> 7c3b32f332f (Avoid unnecessary lookup in catalog for system tables/views)
         return catalog.getView(session, viewName);
     }
 
@@ -4422,7 +4437,10 @@ public class IcebergMetadata
     @Override
     public Optional<ConnectorMaterializedViewDefinition> getMaterializedView(ConnectorSession session, SchemaTableName viewName)
     {
-        return catalog.getMaterializedView(session, viewName);
+        if (isIcebergTableName(viewName.getTableName()) && isDataTable(viewName.getTableName())) {
+            return catalog.getMaterializedView(session, viewName);
+        }
+        return Optional.empty();
     }
 
     @Override

@@ -67,6 +67,7 @@ import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.MoreCollectors.onlyElement;
 import static io.airlift.slice.SizeOf.instanceSize;
+import static io.trino.plugin.iceberg.IcebergTableName.tableNameWithType;
 import static io.trino.plugin.iceberg.IcebergTestUtils.FILE_IO_FACTORY;
 import static io.trino.plugin.iceberg.IcebergTestUtils.getFileSystemFactory;
 import static io.trino.plugin.iceberg.IcebergTestUtils.withSmallRowGroups;
@@ -82,6 +83,11 @@ import static io.trino.testing.TestingAccessControlManager.TestingPrivilegeType.
 import static io.trino.testing.TestingAccessControlManager.privilege;
 import static io.trino.testing.TestingNames.randomNameSuffix;
 import static java.lang.String.format;
+<<<<<<< HEAD
+=======
+import static java.util.Locale.ENGLISH;
+import static java.util.Map.entry;
+>>>>>>> 7c3b32f332f (Avoid unnecessary lookup in catalog for system tables/views)
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -856,6 +862,65 @@ public abstract class BaseIcebergMaterializedViewTest
     }
 
     @Test
+<<<<<<< HEAD
+=======
+    public void testMaterializedViewMetadataTables()
+    {
+        assertUpdate("CREATE TABLE base_table1_mv_copy AS SELECT * FROM base_table1", 6L);
+        String mvName = "test_mv_metadata_tables_" + randomNameSuffix();
+        assertUpdate("CREATE MATERIALIZED VIEW " + mvName + " WITH (partitioning = ARRAY['_date']) AS SELECT * FROM base_table1_mv_copy");
+        assertUpdate("REFRESH MATERIALIZED VIEW " + mvName, 6);
+
+        // Metadata tables resolve against the materialized view's storage table via the MV name,
+        // mirroring the behavior for regular tables.
+        assertThat((long) computeScalar("SELECT count(*) FROM \"" + mvName + "$files\"")).isEqualTo(3L);
+        assertThat((long) computeScalar("SELECT count(*) FROM \"" + mvName + "$snapshots\"")).isEqualTo(2L);
+        assertThat((long) computeScalar("SELECT count(*) FROM \"" + mvName + "$history\"")).isEqualTo(2L);
+        assertThat((long) computeScalar("SELECT count(*) FROM \"" + mvName + "$partitions\"")).isEqualTo(3L);
+        assertThat(query("SELECT file_path, record_count FROM \"" + mvName + "$files\"")).succeeds();
+        assertThat(query("SELECT * FROM \"" + mvName + "$manifests\"")).succeeds();
+        assertThat(query("SELECT * FROM \"" + mvName + "$refs\"")).succeeds();
+        assertThat(query("SELECT * FROM \"" + mvName + "$properties\"")).succeeds();
+
+        // A second refresh adds a snapshot, visible through the MV's $snapshots table.
+        long snapshotsBefore = (long) computeScalar("SELECT count(*) FROM \"" + mvName + "$snapshots\"");
+        assertUpdate("INSERT INTO base_table1_mv_copy VALUES (6, DATE '2019-09-11')", 1);
+        // implicit RefreshType.INCREMENTAL, only new row is added
+        assertUpdate("REFRESH MATERIALIZED VIEW " + mvName, 1);
+        assertThat(computeScalar("SELECT count(*) FROM " + mvName)).isEqualTo(7L);
+        assertThat((long) computeScalar("SELECT count(*) FROM \"" + mvName + "$snapshots\"")).isGreaterThan(snapshotsBefore);
+
+        // A metadata-table suffix on a non-existent materialized view still reports the table as missing.
+        assertThat(query("SELECT * FROM \"nonexistent_mv_" + randomNameSuffix() + "$partitions\""))
+                .failure().hasMessageMatching(".* does not exist");
+
+        // Access control is keyed on the suffixed name, exactly as for base-table metadata tables.
+        assertAccessDenied(
+                "SELECT * FROM \"" + mvName + "$partitions\"",
+                "Cannot select from columns .*",
+                privilege(mvName + "$partitions", SELECT_COLUMN));
+
+        assertUpdate("DROP MATERIALIZED VIEW " + mvName);
+        assertUpdate("DROP TABLE base_table1_mv_copy");
+    }
+
+    @Test
+    public void testMetadataTablesForNonExistentMaterializedView()
+    {
+        String mvName = "nonexistent_mv_" + randomNameSuffix();
+        for (TableType tableType : TableType.values()) {
+            if (tableType == TableType.DATA || tableType == TableType.MATERIALIZED_VIEW_STORAGE) {
+                continue;
+            }
+            String metadataTable = tableNameWithType(mvName, tableType);
+            assertThat(query("SELECT * FROM \"" + metadataTable + "\""))
+                    .describedAs(tableType.name())
+                    .failure().hasMessageMatching(".* Table '.*.\"" + mvName + "\\$" + tableType.name().toLowerCase(ENGLISH) + "\"' does not exist");
+        }
+    }
+
+    @Test
+>>>>>>> 7c3b32f332f (Avoid unnecessary lookup in catalog for system tables/views)
     public void testMaterializedViewCreatedFromTableFunction()
     {
         String viewName = "materialized_view_for_ptf_" + randomNameSuffix();

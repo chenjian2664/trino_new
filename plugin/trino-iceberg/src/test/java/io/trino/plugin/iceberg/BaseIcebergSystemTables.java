@@ -235,6 +235,76 @@ public abstract class BaseIcebergSystemTables
     }
 
     @Test
+<<<<<<< HEAD
+=======
+    public void testFilesAndPartitionsTableWithoutSnapshot()
+    {
+        SchemaTableName tableName = new SchemaTableName("test_schema", "test_table_without_snapshot");
+        createTableWithoutSnapshot(tableName);
+        try {
+            assertThat(computeActual("SELECT * FROM test_schema.\"test_table_without_snapshot$files\"").getRowCount()).isEqualTo(0);
+            assertThat(computeActual("SELECT * FROM test_schema.\"test_table_without_snapshot$partitions\"").getRowCount()).isEqualTo(0);
+        }
+        finally {
+            catalog.dropTable(SESSION, tableName);
+        }
+    }
+
+    @Test
+    public void testMetadataTablesWithoutSnapshot()
+    {
+        SchemaTableName tableName = new SchemaTableName("test_schema", "test_metadata_tables_without_snapshot");
+        createTableWithoutSnapshot(tableName);
+        try {
+            for (TableType tableType : TableType.values()) {
+                if (tableType == TableType.DATA || tableType == TableType.MATERIALIZED_VIEW_STORAGE) {
+                    continue;
+                }
+                String metadataTable = tableNameWithType(tableName.getTableName(), tableType);
+                assertThatCode(() -> computeActual("SELECT * FROM test_schema.\"" + metadataTable + "\""))
+                        .describedAs(tableType.name())
+                        .doesNotThrowAnyException();
+            }
+        }
+        finally {
+            catalog.dropTable(SESSION, tableName);
+        }
+    }
+
+    @Test
+    public void testMetadataTablesForNonExistentTable()
+    {
+        String tableName = "nonexistent_table";
+        for (TableType tableType : TableType.values()) {
+            if (tableType == TableType.DATA || tableType == TableType.MATERIALIZED_VIEW_STORAGE) {
+                continue;
+            }
+            String metadataTable = tableNameWithType(tableName, tableType);
+            assertThat(query("SELECT * FROM test_schema.\"" + metadataTable + "\""))
+                    .describedAs(tableType.name())
+                    .failure().hasMessageMatching(".* Table '.*.\"" + tableName + "\\$" + tableType.name().toLowerCase(ENGLISH) + "\"' does not exist");
+        }
+    }
+
+    // Create the table with the Iceberg API so that it has no snapshot (Trino CREATE TABLE would add an empty one)
+    private void createTableWithoutSnapshot(SchemaTableName tableName)
+    {
+        Schema schema = new Schema(
+                Types.NestedField.optional(1, "_bigint", Types.LongType.get()),
+                Types.NestedField.optional(2, "_date", Types.DateType.get()));
+        catalog.newCreateTableTransaction(
+                        SESSION,
+                        tableName,
+                        schema,
+                        PartitionSpec.builderFor(schema).identity("_date").build(),
+                        SortOrder.unsorted(),
+                        Optional.ofNullable(catalog.defaultTableLocation(SESSION, tableName)),
+                        ImmutableMap.of())
+                .commitTransaction();
+    }
+
+    @Test
+>>>>>>> 7c3b32f332f (Avoid unnecessary lookup in catalog for system tables/views)
     public void testHistoryTable()
     {
         assertQuery("SHOW COLUMNS FROM test_schema.\"test_table$history\"",
