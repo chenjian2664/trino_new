@@ -249,8 +249,13 @@
 
             <dependency>
                 <groupId>com.oracle.database.jdbc</groupId>
+<<<<<<< HEAD
                 <artifactId>ojdbc11-production</artifactId>
                 <version>23.26.1.0.0</version>
+=======
+                <artifactId>ojdbc17-production</artifactId>
+                <version>23.26.3.0.0</version>
+>>>>>>> ccb954e99a1 (Bump ojdbc17-production to 23.26.3.0.0)
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
