@@ -202,6 +202,7 @@
         <dep.jna.version>5.18.1</dep.jna.version>
         <dep.jsonwebtoken.version>0.13.0</dep.jsonwebtoken.version>
         <dep.jts.version>1.20.0</dep.jts.version>
+<<<<<<< HEAD
         <dep.okhttp.version>5.3.2</dep.okhttp.version>
         <dep.okio.version>3.17.0</dep.okio.version>
         <dep.netty.version>4.2.12.Final</dep.netty.version>
@@ -211,6 +212,19 @@
         <dep.takari.version>2.3.3</dep.takari.version>
         <dep.tcnative.version>2.0.77.Final</dep.tcnative.version>
         <dep.tempto.version>202</dep.tempto.version>
+=======
+        <dep.netty.version>4.2.16.Final</dep.netty.version>
+        <dep.okhttp.version>5.4.0</dep.okhttp.version>
+        <dep.okio.version>3.18.1</dep.okio.version>
+        <dep.parquet.version>1.17.1</dep.parquet.version>
+        <dep.protobuf.version>4.35.1</dep.protobuf.version>
+        <dep.sis.version>1.6</dep.sis.version>
+        <dep.snowflake.version>4.3.2</dep.snowflake.version>
+        <dep.swagger.version>2.2.52</dep.swagger.version>
+        <dep.takari.version>2.3.4</dep.takari.version>
+        <dep.tcnative.version>2.0.81.Final</dep.tcnative.version>
+        <dep.testng.version>7.8.0</dep.testng.version>
+>>>>>>> 4e4786f7cd9 (Bump dep.okio.version from 3.18.0 to 3.18.1)
         <dep.zookeeper.version>3.9.5</dep.zookeeper.version>
         <extraJavaVectorArgs>--add-modules=jdk.incubator.vector</extraJavaVectorArgs>
         <!--
