@@ -314,7 +314,11 @@
             <dependency>
                 <groupId>software.amazon.awssdk</groupId>
                 <artifactId>bom</artifactId>
+<<<<<<< HEAD
                 <version>2.42.37</version>
+=======
+                <version>2.49.5</version>
+>>>>>>> 30cca1414c0 (Bump software.amazon.awssdk:bom from 2.49.4 to 2.49.5)
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
